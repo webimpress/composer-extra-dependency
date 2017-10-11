@@ -18,6 +18,7 @@ use Composer\Package\PackageInterface;
 use Composer\Package\RootPackageInterface;
 use Composer\Package\Version\VersionSelector;
 use Composer\Repository\RepositoryManager;
+use Composer\Repository\WritableRepositoryInterface;
 use org\bovigo\vfs\vfsStream;
 use PHPUnit\Framework\TestCase;
 use Prophecy\Argument;
@@ -37,11 +38,24 @@ class PluginTest extends TestCase
     /** @var IOInterface|ObjectProphecy */
     private $io;
 
+    /** @var WritableRepositoryInterface */
+    private $localRepository;
+
     protected function setUp()
     {
         parent::setUp();
 
+        $this->localRepository = $this->prophesize(WritableRepositoryInterface::class);
+        $this->localRepository->getPackages()->willReturn([]);
+
+        $repositoryManager = $this->prophesize(RepositoryManager::class);
+        $repositoryManager->getLocalRepository()->willReturn($this->localRepository->reveal());
+
         $this->composer = $this->prophesize(Composer::class);
+        $this->composer->getRepositoryManager()
+            ->willReturn($repositoryManager->reveal())
+            ->shouldBeCalled();
+
         $this->io = $this->prophesize(IOInterface::class);
 
         $this->plugin = new Plugin();
@@ -244,7 +258,8 @@ class PluginTest extends TestCase
         $this->composer->getConfig()->willReturn($config->reveal());
 
         $this->io->askAndValidate(
-            'Enter the version of extra-dependency-foo to require (or leave blank to use the latest version): ',
+            'Enter the version of <info>extra-dependency-foo</info> to require'
+                . ' (or leave blank to use the latest version): ',
             Argument::type('callable')
         )->willReturn('17.0.1-dev');
 
@@ -316,7 +331,8 @@ class PluginTest extends TestCase
         $this->composer->getConfig()->willReturn($config->reveal());
 
         $this->io->askAndValidate(
-            'Enter the version of extra-dependency-foo to require (or leave blank to use the latest version): ',
+            'Enter the version of <info>extra-dependency-foo</info> to require'
+                . ' (or leave blank to use the latest version): ',
             Argument::type('callable')
         )->willReturn('17.0.1-dev');
 
@@ -396,7 +412,8 @@ class PluginTest extends TestCase
         $this->composer->getConfig()->willReturn($config->reveal());
 
         $this->io->askAndValidate(
-            'Enter the version of extra-dependency-foo to require (or leave blank to use the latest version): ',
+            'Enter the version of <info>extra-dependency-foo</info> to require'
+                . ' (or leave blank to use the latest version): ',
             Argument::type('callable')
         )->willReturn('17.0.1-dev');
 
@@ -474,7 +491,8 @@ class PluginTest extends TestCase
         $this->composer->getConfig()->willReturn($config->reveal());
 
         $this->io->askAndValidate(
-            'Enter the version of extra-dependency-foo to require (or leave blank to use the latest version): ',
+            'Enter the version of <info>extra-dependency-foo</info> to require'
+                . ' (or leave blank to use the latest version): ',
             Argument::type('callable')
         )->willReturn(false);
 
@@ -500,6 +518,11 @@ class PluginTest extends TestCase
         $this->setUpPool();
 
         $this->assertNull($this->plugin->onPostPackage($event->reveal()));
+
+        $json = file_get_contents(vfsStream::url('project/composer.json'));
+        $composer = json_decode($json, true);
+        $this->assertTrue(isset($composer['require']['extra-dependency-foo']));
+        $this->assertSame('13.4.2', $composer['require']['extra-dependency-foo']);
     }
 
     public function testInstallSingleDependencyAndAutomaticallyChooseLatestVersionNotFoundMatchingPackage()
@@ -532,7 +555,8 @@ class PluginTest extends TestCase
         $this->composer->getConfig()->willReturn($config->reveal());
 
         $this->io->askAndValidate(
-            'Enter the version of extra-dependency-foo to require (or leave blank to use the latest version): ',
+            'Enter the version of <info>extra-dependency-foo</info> to require'
+                . ' (or leave blank to use the latest version): ',
             Argument::type('callable')
         )->willReturn(false);
 
@@ -551,6 +575,82 @@ class PluginTest extends TestCase
         $this->plugin->onPostPackage($event->reveal());
     }
 
+    public function testUpdateComposerWithCurrentlyInstalledVersion()
+    {
+        $installedPackage = $this->prophesize(PackageInterface::class);
+        $installedPackage->getName()->willReturn('extra-dependency-foo');
+        $installedPackage->getPrettyVersion()->willReturn('0.5.1');
+
+        $this->localRepository->getPackages()->willReturn([$installedPackage->reveal()]);
+        $this->plugin->activate($this->composer->reveal(), $this->io->reveal());
+
+        /** @var PackageInterface|ObjectProphecy $package */
+        $package = $this->prophesize(PackageInterface::class);
+        $package->getName()->willReturn('some/component');
+        $package->getExtra()->willReturn([
+            'dependency' => [
+                'extra-dependency-foo',
+            ],
+        ]);
+
+        $operation = $this->prophesize(InstallOperation::class);
+        $operation->getPackage()->willReturn($package->reveal());
+
+        $event = $this->prophesize(PackageEvent::class);
+        $event->isDevMode()->willReturn(true);
+        $event->getOperation()->willReturn($operation->reveal());
+
+        $config = $this->prophesize(Config::class);
+        $config->get('sort-packages')->willReturn(true);
+        $config->get(Argument::any())->willReturn(null);
+
+        $rootPackage = $this->prophesize(RootPackageInterface::class);
+        $rootPackage->getRequires()->willReturn([]);
+        $rootPackage->setRequires(Argument::that(function ($arguments) {
+            if (! is_array($arguments)) {
+                return false;
+            }
+
+            if (! isset($arguments['extra-dependency-foo'])) {
+                return false;
+            }
+
+            $argument = $arguments['extra-dependency-foo'];
+
+            if (! $argument instanceof Link) {
+                return false;
+            }
+
+            if ($argument->getTarget() !== 'extra-dependency-foo') {
+                return false;
+            }
+
+            if ($argument->getConstraint()->getPrettyString() !== '^0.5.1') {
+                return false;
+            }
+
+            if ($argument->getDescription() !== 'requires') {
+                return false;
+            }
+
+            return true;
+        }))->shouldBeCalled();
+        $rootPackage->getMinimumStability()->willReturn('stable');
+
+        $this->composer->getPackage()->willReturn($rootPackage);
+        $this->composer->getConfig()->willReturn($config->reveal());
+
+        $this->setUpComposerInstaller(['extra-dependency-foo']);
+        $this->setUpComposerJson();
+
+        $this->assertNull($this->plugin->onPostPackage($event->reveal()));
+
+        $json = file_get_contents(vfsStream::url('project/composer.json'));
+        $composer = json_decode($json, true);
+        $this->assertTrue(isset($composer['require']['extra-dependency-foo']));
+        $this->assertSame('^0.5.1', $composer['require']['extra-dependency-foo']);
+    }
+
     public function testComposerInstallerFactory()
     {
         $r = new ReflectionProperty($this->plugin, 'installerFactory');
@@ -562,9 +662,6 @@ class PluginTest extends TestCase
             ->shouldBeCalled();
         $this->composer->getDownloadManager()
             ->willReturn($this->prophesize(DownloadManager::class))
-            ->shouldBeCalled();
-        $this->composer->getRepositoryManager()
-            ->willReturn($this->prophesize(RepositoryManager::class))
             ->shouldBeCalled();
         $this->composer->getLocker()
             ->willReturn($this->prophesize(Locker::class))

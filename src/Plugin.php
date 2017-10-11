@@ -4,7 +4,6 @@ namespace Webimpress\ComposerExtraDependency;
 
 use Composer\Composer;
 use Composer\DependencyResolver\Operation\InstallOperation;
-use Composer\DependencyResolver\Operation\UpdateOperation;
 use Composer\DependencyResolver\Pool;
 use Composer\EventDispatcher\EventDispatcher;
 use Composer\EventDispatcher\EventSubscriberInterface;
@@ -37,6 +36,9 @@ class Plugin implements PluginInterface, EventSubscriberInterface
     /** @var Composer */
     private $composer;
 
+    /** @var string[] */
+    private $installedPackages;
+
     /** @var IOInterface */
     private $io;
 
@@ -58,6 +60,11 @@ class Plugin implements PluginInterface, EventSubscriberInterface
     {
         $this->composer = $composer;
         $this->io = $io;
+
+        $installedPackages = $this->composer->getRepositoryManager()->getLocalRepository()->getPackages();
+        foreach ($installedPackages as $package) {
+            $this->installedPackages[$package->getName()] = $package->getPrettyVersion();
+        }
     }
 
     public function onPostPackage(PackageEvent $event)
@@ -145,14 +152,25 @@ class Plugin implements PluginInterface, EventSubscriberInterface
 
     private function promptForPackageVersion($name)
     {
-        $validator = function ($input) {
-            $input = trim($input);
-            return $input ?: false;
-        };
+        // Package is currently installed. Add it to root composer.json
+        if (isset($this->installedPackages[$name])) {
+            $this->io->write(sprintf(
+                'Added package <info>%s</info> to composer.json with constraint <info>%s</info>;'
+                    . ' to upgrade, run <info>composer require %s:VERSION</info>',
+                $name,
+                '^' . $this->installedPackages[$name],
+                $name
+            ));
+
+            return '^' . $this->installedPackages[$name];
+        }
 
         $constraint = $this->io->askAndValidate(
-            sprintf('Enter the version of %s to require (or leave blank to use the latest version): ', $name),
-            $validator
+            sprintf('Enter the version of <info>%s</info> to require (or leave blank to use the latest version): ', $name),
+            function ($input) {
+                $input = trim($input);
+                return $input ?: false;
+            }
         );
 
         if ($constraint === false) {
@@ -184,11 +202,11 @@ class Plugin implements PluginInterface, EventSubscriberInterface
         );
     }
 
-    private function hasPackage($name)
+    private function hasPackage($package)
     {
         $requires = $this->composer->getPackage()->getRequires();
-        foreach ($requires as $link) {
-            if (strtolower($link->getTarget()) === strtolower($name)) {
+        foreach ($requires as $name => $link) {
+            if (strtolower($name) === strtolower($package)) {
                 return true;
             }
         }
