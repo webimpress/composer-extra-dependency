@@ -143,7 +143,7 @@ class Plugin implements PluginInterface, EventSubscriberInterface
         return $installer->run();
     }
 
-    public function promptForPackageVersion($name)
+    private function promptForPackageVersion($name)
     {
         $validator = function ($input) {
             $input = trim($input);
