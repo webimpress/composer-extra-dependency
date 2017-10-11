@@ -166,7 +166,10 @@ class Plugin implements PluginInterface, EventSubscriberInterface
         }
 
         $constraint = $this->io->askAndValidate(
-            sprintf('Enter the version of <info>%s</info> to require (or leave blank to use the latest version): ', $name),
+            sprintf(
+                'Enter the version of <info>%s</info> to require (or leave blank to use the latest version): ',
+                $name
+            ),
             function ($input) {
                 $input = trim($input);
                 return $input ?: false;
