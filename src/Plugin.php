@@ -136,6 +136,7 @@ class Plugin implements PluginInterface, EventSubscriberInterface
     {
         $this->io->write('<info>    Running an update to install dependent packages</info>');
 
+        /** @var Installer $installer */
         $installer = call_user_func(
             $this->installerFactory,
             $this->composer,
@@ -143,6 +144,7 @@ class Plugin implements PluginInterface, EventSubscriberInterface
             $rootPackage
         );
 
+        $installer->setRunScripts(false);
         $installer->disablePlugins();
         $installer->setUpdate();
         $installer->setUpdateWhitelist($packages);
