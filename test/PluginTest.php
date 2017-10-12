@@ -65,6 +65,7 @@ class PluginTest extends TestCase
     protected function setUpComposerInstaller(array $expectedPackages, $expectedReturn = 0)
     {
         $installer = $this->prophesize(Installer::class);
+        $installer->setRunScripts(false)->shouldBeCalled();
         $installer->disablePlugins()->shouldBeCalled();
         $installer->setUpdate()->shouldBeCalled();
         $installer->setUpdateWhitelist($expectedPackages)->shouldBeCalled();
