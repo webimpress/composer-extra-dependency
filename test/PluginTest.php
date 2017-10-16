@@ -652,6 +652,86 @@ class PluginTest extends TestCase
         $this->assertSame('^0.5.1', $composer['require']['extra-dependency-foo']);
     }
 
+    public function testNoInteractionModeUsedVersionIsAsterix()
+    {
+        /** @var PackageInterface|ObjectProphecy $package */
+        $package = $this->prophesize(PackageInterface::class);
+        $package->getName()->willReturn('some/component');
+        $package->getExtra()->willReturn([
+            'dependency' => [
+                'extra-dependency-foo',
+            ],
+        ]);
+
+        $operation = $this->prophesize(InstallOperation::class);
+        $operation->getPackage()->willReturn($package->reveal());
+
+        $event = $this->prophesize(PackageEvent::class);
+        $event->isDevMode()->willReturn(true);
+        $event->getOperation()->willReturn($operation->reveal());
+
+        $config = $this->prophesize(Config::class);
+        $config->get('sort-packages')->willReturn(true);
+        $config->get(Argument::any())->willReturn(null);
+
+        $rootPackage = $this->prophesize(RootPackageInterface::class);
+        $rootPackage->getRequires()->willReturn([]);
+        $rootPackage->setRequires(Argument::that(function ($arguments) {
+            if (! is_array($arguments)) {
+                return false;
+            }
+
+            if (! isset($arguments['extra-dependency-foo'])) {
+                return false;
+            }
+
+            $argument = $arguments['extra-dependency-foo'];
+
+            if (! $argument instanceof Link) {
+                return false;
+            }
+
+            if ($argument->getTarget() !== 'extra-dependency-foo') {
+                return false;
+            }
+
+            if ($argument->getConstraint()->getPrettyString() !== '*') {
+                return false;
+            }
+
+            if ($argument->getDescription() !== 'requires') {
+                return false;
+            }
+
+            return true;
+        }))->shouldBeCalled();
+        $rootPackage->getMinimumStability()->willReturn('stable');
+
+        $this->composer->getPackage()->willReturn($rootPackage);
+        $this->composer->getConfig()->willReturn($config->reveal());
+
+        // In no-interactive mode, default value is returned straight away
+        $this->io->askAndValidate(
+            'Enter the version of <info>extra-dependency-foo</info> to require'
+            . ' (or leave blank to use the latest version): ',
+            Argument::type('callable')
+        )->willReturn(null);
+
+        $this->io->write('<info>    Updating composer.json</info>')->shouldBeCalled();
+        $this->io->write('<info>Updating root package</info>')->shouldBeCalled();
+        $this->io->write('<info>    Running an update to install dependent packages</info>')->shouldBeCalled();
+
+        $this->setUpComposerInstaller(['extra-dependency-foo']);
+        $this->setUpComposerJson();
+
+        $this->assertNull($this->plugin->onPostPackage($event->reveal()));
+
+        $json = file_get_contents(vfsStream::url('project/composer.json'));
+        $composer = json_decode($json, true);
+        $this->assertTrue(isset($composer['require']['extra-dependency-foo']));
+        $this->assertSame('*', $composer['require']['extra-dependency-foo']);
+    }
+
     public function testComposerInstallerFactory()
     {
         $r = new ReflectionProperty($this->plugin, 'installerFactory');
