@@ -261,7 +261,9 @@ class PluginTest extends TestCase
         $this->io->askAndValidate(
             'Enter the version of <info>extra-dependency-foo</info> to require'
                 . ' (or leave blank to use the latest version): ',
-            Argument::type('callable')
+            Argument::type('callable'),
+            null,
+            false
         )->willReturn('17.0.1-dev');
 
         $this->io->write('<info>    Updating composer.json</info>')->shouldBeCalled();
@@ -334,7 +336,9 @@ class PluginTest extends TestCase
         $this->io->askAndValidate(
             'Enter the version of <info>extra-dependency-foo</info> to require'
                 . ' (or leave blank to use the latest version): ',
-            Argument::type('callable')
+            Argument::type('callable'),
+            null,
+            false
         )->willReturn('17.0.1-dev');
 
         $this->io->write('<info>    Updating composer.json</info>')->shouldBeCalled();
@@ -415,7 +419,9 @@ class PluginTest extends TestCase
         $this->io->askAndValidate(
             'Enter the version of <info>extra-dependency-foo</info> to require'
                 . ' (or leave blank to use the latest version): ',
-            Argument::type('callable')
+            Argument::type('callable'),
+            null,
+            false
         )->willReturn('17.0.1-dev');
 
         $this->io->write('<info>    Updating composer.json</info>')->shouldBeCalled();
@@ -494,7 +500,9 @@ class PluginTest extends TestCase
         $this->io->askAndValidate(
             'Enter the version of <info>extra-dependency-foo</info> to require'
                 . ' (or leave blank to use the latest version): ',
-            Argument::type('callable')
+            Argument::type('callable'),
+            null,
+            false
         )->willReturn(false);
 
         $this->io->write('<info>    Updating composer.json</info>')->shouldBeCalled();
@@ -558,7 +566,9 @@ class PluginTest extends TestCase
         $this->io->askAndValidate(
             'Enter the version of <info>extra-dependency-foo</info> to require'
                 . ' (or leave blank to use the latest version): ',
-            Argument::type('callable')
+            Argument::type('callable'),
+            null,
+            false
         )->willReturn(false);
 
         $this->setUpComposerJson();
