@@ -178,6 +178,7 @@ class Plugin implements PluginInterface, EventSubscriberInterface
             }
         );
 
+        // value provided by user or bool false if empty
         if ($constraint === false) {
             $constraint = $this->findBestVersionForPackage($name);
             $this->io->write(sprintf(
@@ -185,6 +186,9 @@ class Plugin implements PluginInterface, EventSubscriberInterface
                 $constraint,
                 $name
             ));
+        } elseif ($constraint === null) {
+            // when no-interaction mode is enabled - default value: null
+            $constraint = '*';
         }
 
         return $constraint;
