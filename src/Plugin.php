@@ -175,8 +175,10 @@ class Plugin implements PluginInterface, EventSubscriberInterface
             function ($input) {
                 $input = trim($input);
                 return $input ?: false;
-            }
-        , null, false);
+            },
+            null,
+            false
+        );
 
         if ($constraint === false) {
             $constraint = $this->findBestVersionForPackage($name);
