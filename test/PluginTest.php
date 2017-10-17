@@ -155,6 +155,34 @@ class PluginTest extends TestCase
         $this->assertNull($this->plugin->onPostPackage($event->reveal()));
     }
 
+    public function testDoNothingInNoInteractionMode()
+    {
+        /** @var PackageInterface|ObjectProphecy $package */
+        $package = $this->prophesize(PackageInterface::class);
+        $package->getName()->willReturn('some/component');
+        $package->getExtra()->willReturn([
+            'dependency' => [
+                'extra-dependency-foo',
+            ],
+        ]);
+
+        $operation = $this->prophesize(InstallOperation::class);
+        $operation->getPackage()->willReturn($package->reveal());
+
+        $event = $this->prophesize(PackageEvent::class);
+        $event->isDevMode()->willReturn(true);
+        $event->getOperation()->willReturn($operation->reveal());
+
+        $rootPackage = $this->prophesize(RootPackageInterface::class);
+        $rootPackage->getRequires()->willReturn([]);
+
+        $this->composer->getPackage()->willReturn($rootPackage);
+
+        $this->io->isInteractive()->willReturn(false);
+
+        $this->assertNull($this->plugin->onPostPackage($event->reveal()));
+    }
+
     public function testDoNothingWhenThereIsNoExtraDependencies()
     {
         /** @var PackageInterface|ObjectProphecy $package */
@@ -258,6 +286,7 @@ class PluginTest extends TestCase
         $this->composer->getPackage()->willReturn($rootPackage);
         $this->composer->getConfig()->willReturn($config->reveal());
 
+        $this->io->isInteractive()->willReturn(true);
         $this->io->askAndValidate(
             'Enter the version of <info>extra-dependency-foo</info> to require'
                 . ' (or leave blank to use the latest version): ',
@@ -331,6 +360,7 @@ class PluginTest extends TestCase
         $this->composer->getPackage()->willReturn($rootPackage);
         $this->composer->getConfig()->willReturn($config->reveal());
 
+        $this->io->isInteractive()->willReturn(true);
         $this->io->askAndValidate(
             'Enter the version of <info>extra-dependency-foo</info> to require'
                 . ' (or leave blank to use the latest version): ',
@@ -412,6 +442,7 @@ class PluginTest extends TestCase
         $this->composer->getPackage()->willReturn($rootPackage);
         $this->composer->getConfig()->willReturn($config->reveal());
 
+        $this->io->isInteractive()->willReturn(true);
         $this->io->askAndValidate(
             'Enter the version of <info>extra-dependency-foo</info> to require'
                 . ' (or leave blank to use the latest version): ',
@@ -491,6 +522,7 @@ class PluginTest extends TestCase
         $this->composer->getPackage()->willReturn($rootPackage);
         $this->composer->getConfig()->willReturn($config->reveal());
 
+        $this->io->isInteractive()->willReturn(true);
         $this->io->askAndValidate(
             'Enter the version of <info>extra-dependency-foo</info> to require'
                 . ' (or leave blank to use the latest version): ',
@@ -555,6 +587,7 @@ class PluginTest extends TestCase
         $this->composer->getPackage()->willReturn($rootPackage);
         $this->composer->getConfig()->willReturn($config->reveal());
 
+        $this->io->isInteractive()->willReturn(true);
         $this->io->askAndValidate(
             'Enter the version of <info>extra-dependency-foo</info> to require'
                 . ' (or leave blank to use the latest version): ',
@@ -640,6 +673,17 @@ class PluginTest extends TestCase
 
         $this->composer->getPackage()->willReturn($rootPackage);
         $this->composer->getConfig()->willReturn($config->reveal());
+
+        $this->io->isInteractive()->willReturn(true);
+        $this->io
+            ->write(
+                'Added package <info>extra-dependency-foo</info> to composer.json with constraint'
+                . ' <info>^0.5.1</info>; to upgrade, run <info>composer require extra-dependency-foo:VERSION</info>'
+            )
+            ->shouldBeCalled();
+        $this->io->write('<info>    Updating composer.json</info>')->shouldBeCalled();
+        $this->io->write('<info>Updating root package</info>')->shouldBeCalled();
+        $this->io->write('<info>    Running an update to install dependent packages</info>')->shouldBeCalled();
 
         $this->setUpComposerInstaller(['extra-dependency-foo']);
         $this->setUpComposerJson();
