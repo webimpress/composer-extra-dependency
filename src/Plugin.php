@@ -214,7 +214,8 @@ class Plugin implements PluginInterface, EventSubscriberInterface
 
     private function hasPackage($package)
     {
-        $requires = $this->composer->getPackage()->getRequires();
+        $rootPackage = $this->composer->getPackage();
+        $requires = $rootPackage->getRequires() + $rootPackage->getDevRequires();
         foreach ($requires as $name => $link) {
             if (strtolower($name) === strtolower($package)) {
                 return true;
