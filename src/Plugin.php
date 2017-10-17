@@ -74,6 +74,11 @@ class Plugin implements PluginInterface, EventSubscriberInterface
             return;
         }
 
+        if (! $this->io->isInteractive()) {
+            // Do nothing in no-interactive mode
+            return;
+        }
+
         $operation = $event->getOperation();
         if ($operation instanceof InstallOperation) {
             $package = $operation->getPackage();
