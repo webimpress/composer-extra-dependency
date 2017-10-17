@@ -55,5 +55,9 @@ Here also `composer.json` will be updated and package will be installed.
 Plugin runs always on post update/install package to check if there are some
 dependencies to require explicitly in user `composer.json` file.
 
-> If dependency is already provided in user `composer.json` the plugin is not
-> going to do anything.
+> If dependency is already provided in user `composer.json` (`require` or
+> `require-dev` section) the plugin is not going to do anything.
+
+> Please note plugin works only in __development interactive mode__.
+> It means when `--no-dev` or `--no-interaction` flags are provided,
+> plugin is not going to do anything.
