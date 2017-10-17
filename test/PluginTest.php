@@ -175,6 +175,7 @@ class PluginTest extends TestCase
 
         $rootPackage = $this->prophesize(RootPackageInterface::class);
         $rootPackage->getRequires()->willReturn([]);
+        $rootPackage->getDevRequires()->willReturn([]);
 
         $this->composer->getPackage()->willReturn($rootPackage);
 
@@ -222,7 +223,40 @@ class PluginTest extends TestCase
         $link->getTarget()->willReturn('extra-dependency-foo');
 
         $rootPackage = $this->prophesize(RootPackageInterface::class);
-        $rootPackage->getRequires()->willReturn(['extra-dependency-foo' => $link->reveal()]);
+        $rootPackage->getDevRequires()->willReturn(['extra-dependency-foo' => $link->reveal()]);
+
+        $this->composer->getPackage()->willReturn($rootPackage);
+
+        $this->assertNull($this->plugin->onPostPackage($event->reveal()));
+    }
+
+    public function testDependencyAlreadyIsInRequiredDevSection()
+    {
+        /** @var PackageInterface|ObjectProphecy $package */
+        $package = $this->prophesize(PackageInterface::class);
+        $package->getName()->willReturn('some/component');
+        $package->getExtra()->willReturn([
+            'dependency' => [
+                'extra-dependency-foo',
+            ],
+        ]);
+
+        $operation = $this->prophesize(InstallOperation::class);
+        $operation->getPackage()->willReturn($package->reveal());
+
+        $event = $this->prophesize(PackageEvent::class);
+        $event->isDevMode()->willReturn(true);
+        $event->getOperation()->willReturn($operation->reveal());
+
+        $this->io->isInteractive()->willReturn(true)->shouldBeCalled();
+        $this->io->askAndValidate(Argument::any())->shouldNotBeCalled();
+
+        $link = $this->prophesize(Link::class);
+        $link->getTarget()->willReturn('extra-dependency-foo');
+
+        $rootPackage = $this->prophesize(RootPackageInterface::class);
+        $rootPackage->getRequires()->willReturn([]);
+        $rootPackage->getDevRequires()->willReturn(['extra-dependency-foo' => $link->reveal()]);
 
         $this->composer->getPackage()->willReturn($rootPackage);
 
@@ -247,12 +281,16 @@ class PluginTest extends TestCase
         $event->isDevMode()->willReturn(true);
         $event->getOperation()->willReturn($operation->reveal());
 
+        $this->io->isInteractive()->willReturn(true)->shouldBeCalled();
+        $this->io->askAndValidate(Argument::any())->shouldNotBeCalled();
+
         $config = $this->prophesize(Config::class);
         $config->get('sort-packages')->willReturn(true);
         $config->get(Argument::any())->willReturn(null);
 
         $rootPackage = $this->prophesize(RootPackageInterface::class);
         $rootPackage->getRequires()->willReturn([]);
+        $rootPackage->getDevRequires()->willReturn([]);
         $rootPackage->setRequires(Argument::that(function ($arguments) {
             if (! is_array($arguments)) {
                 return false;
@@ -327,6 +365,7 @@ class PluginTest extends TestCase
 
         $rootPackage = $this->prophesize(RootPackageInterface::class);
         $rootPackage->getRequires()->willReturn([]);
+        $rootPackage->getDevRequires()->willReturn([]);
         $rootPackage->setRequires(Argument::that(function ($arguments) {
             if (! is_array($arguments)) {
                 return false;
@@ -405,6 +444,7 @@ class PluginTest extends TestCase
 
         $rootPackage = $this->prophesize(RootPackageInterface::class);
         $rootPackage->getRequires()->willReturn(['extra-dependency-bar' => $link->reveal()]);
+        $rootPackage->getDevRequires()->willReturn([]);
         $rootPackage->setRequires(Argument::that(function ($arguments) {
             if (! is_array($arguments)) {
                 return false;
@@ -488,6 +528,7 @@ class PluginTest extends TestCase
 
         $rootPackage = $this->prophesize(RootPackageInterface::class);
         $rootPackage->getRequires()->willReturn([]);
+        $rootPackage->getDevRequires()->willReturn([]);
         $rootPackage->setRequires(Argument::that(function ($arguments) {
             if (! is_array($arguments)) {
                 return false;
@@ -582,6 +623,7 @@ class PluginTest extends TestCase
 
         $rootPackage = $this->prophesize(RootPackageInterface::class);
         $rootPackage->getRequires()->willReturn([]);
+        $rootPackage->getDevRequires()->willReturn([]);
         $rootPackage->getMinimumStability()->willReturn('stable');
 
         $this->composer->getPackage()->willReturn($rootPackage);
@@ -640,6 +682,7 @@ class PluginTest extends TestCase
 
         $rootPackage = $this->prophesize(RootPackageInterface::class);
         $rootPackage->getRequires()->willReturn([]);
+        $rootPackage->getDevRequires()->willReturn([]);
         $rootPackage->setRequires(Argument::that(function ($arguments) {
             if (! is_array($arguments)) {
                 return false;
