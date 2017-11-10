@@ -65,7 +65,24 @@ class PluginTest extends TestCase
         $this->plugin->activate($this->composer->reveal(), $this->io->reveal());
     }
 
-    protected function setUpComposerInstaller(array $expectedPackages, $expectedReturn = 0)
+    private function setUpRootPackage(
+        array $dependencies = [],
+        array $devDependencies = [],
+        $minimumStability = null
+    ) {
+        $rootPackage = $this->prophesize(RootPackageInterface::class);
+        $rootPackage->getRequires()->willReturn($dependencies)->shouldBeCalled();
+        $rootPackage->getDevRequires()->willReturn($devDependencies)->shouldBeCalled();
+        if ($minimumStability) {
+            $rootPackage->getMinimumStability()->willReturn($minimumStability)->shouldBeCalled();
+        } else {
+            $rootPackage->getMinimumStability()->shouldNotBeCalled();
+        }
+
+        $this->composer->getPackage()->willReturn($rootPackage->reveal())->shouldBeCalled();
+    }
+
+    private function setUpComposerInstaller(array $expectedPackages, $expectedReturn = 0)
     {
         $installer = $this->prophesize(Installer::class);
         $installer->setRunScripts(false)->shouldBeCalled();
@@ -81,7 +98,7 @@ class PluginTest extends TestCase
         });
     }
 
-    protected function setUpVersionSelector(VersionSelector $versionSelector)
+    private function setUpVersionSelector(VersionSelector $versionSelector)
     {
         $r = new ReflectionProperty($this->plugin, 'versionSelectorFactory');
         $r->setAccessible(true);
@@ -90,7 +107,7 @@ class PluginTest extends TestCase
         });
     }
 
-    protected function setUpPool()
+    private function setUpPool()
     {
         $pool = $this->prophesize(Pool::class);
 
@@ -99,7 +116,7 @@ class PluginTest extends TestCase
         $r->setValue($this->plugin, $pool->reveal());
     }
 
-    protected function setUpComposerJson($data = null)
+    private function setUpComposerJson($data = null)
     {
         $project = vfsStream::setup('project');
         vfsStream::newFile('composer.json')
@@ -113,13 +130,13 @@ class PluginTest extends TestCase
         });
     }
 
-    protected function createComposerJson($data)
+    private function createComposerJson($data)
     {
         $data = $data ?: $this->getDefaultComposerData();
         return json_encode($data);
     }
 
-    protected function getDefaultComposerData()
+    private function getDefaultComposerData()
     {
         return [
             'name' => 'test/project',
@@ -129,6 +146,46 @@ class PluginTest extends TestCase
                 'webimpress/my-package' => '^1.0.0-dev@dev',
             ],
         ];
+    }
+
+    private function getCommandEvent($isDevMode = true)
+    {
+        $event = $this->prophesize(Event::class);
+        $event->isDevMode()->willReturn($isDevMode);
+
+        return $event->reveal();
+    }
+
+    private function getPackageEvent(
+        $packageName,
+        array $extra,
+        $operationClass = InstallOperation::class
+    ) {
+        /** @var PackageInterface|ObjectProphecy $package */
+        $package = $this->prophesize(PackageInterface::class);
+        $package->getName()->willReturn($packageName);
+        $package->getExtra()->willReturn($extra);
+
+        $operation = $this->prophesize($operationClass);
+        if ($operationClass === InstallOperation::class) {
+            $operation->getPackage()->willReturn($package->reveal());
+        } else {
+            $operation->getTargetPackage()->willReturn($package->reveal());
+        }
+
+        $event = $this->prophesize(PackageEvent::class);
+        $event->isDevMode()->willReturn(true);
+        $event->getOperation()->willReturn($operation->reveal())->shouldBeCalled();
+
+        return $event->reveal();
+    }
+
+    private function injectPackages(array $packagesToInstall)
+    {
+        $p = new ReflectionProperty($this->plugin, 'packagesToInstall');
+        $p->setAccessible(true);
+
+        $p->setValue($this->plugin, $packagesToInstall);
     }
 
     public function testActivateSetsComposerAndIoProperties()
@@ -152,14 +209,6 @@ class PluginTest extends TestCase
         $this->assertEquals('onPostPackage', $subscribers['post-package-update']);
         $this->assertEquals('onPostCommand', $subscribers['post-install-cmd']);
         $this->assertEquals('onPostCommand', $subscribers['post-update-cmd']);
-    }
-
-    private function getCommandEvent($isDevMode = true)
-    {
-        $event = $this->prophesize(Event::class);
-        $event->isDevMode()->willReturn($isDevMode);
-
-        return $event->reveal();
     }
 
     public function testPostPackageDoNothingInNoDevMode()
@@ -187,14 +236,6 @@ class PluginTest extends TestCase
         $this->assertNull($this->plugin->onPostPackage($event->reveal()));
     }
 
-    private function injectPackages(array $packagesToInstall)
-    {
-        $p = new ReflectionProperty($this->plugin, 'packagesToInstall');
-        $p->setAccessible(true);
-
-        $p->setValue($this->plugin, $packagesToInstall);
-    }
-
     public function testPostCommandDoNothingInNoInteractionMode()
     {
         $this->injectPackages([
@@ -207,12 +248,38 @@ class PluginTest extends TestCase
         $this->assertNull($this->plugin->onPostCommand($this->getCommandEvent()));
     }
 
-    public function testPostCommandInstallPackagesAndUpdateComposer()
+    public function sortPackages()
     {
-        $this->injectPackages([
-            'my-package-foo' => '2.37.1',
-            'other-package' => 'dev-feature/branch',
-        ]);
+        return [
+            [
+                true,
+                [
+                    'zoo/bar' => '1.2.4',
+                    'foo/baz' => '2.7.3',
+                ],
+                '{"foo\/baz":"2.7.3","webimpress\/my-package":"^1.0.0-dev@dev","zoo\/bar":"1.2.4"}',
+            ],
+            [
+                false,
+                [
+                    'zoo/bar' => '1.2.4',
+                    'foo/baz' => '2.7.3',
+                ],
+                '{"webimpress\/my-package":"^1.0.0-dev@dev","zoo\/bar":"1.2.4","foo\/baz":"2.7.3"}',
+            ],
+        ];
+    }
+
+    /**
+     * @dataProvider sortPackages
+     *
+     * @param bool $sortPackages
+     * @param array $packages
+     * @param string $result
+     */
+    public function testPostCommandInstallPackagesAndUpdateComposer($sortPackages, array $packages, $result)
+    {
+        $this->injectPackages($packages);
 
         $this->io->isInteractive()->willReturn(true);
         $this->io->write('<info>    Updating composer.json</info>')->shouldBeCalled();
@@ -220,81 +287,77 @@ class PluginTest extends TestCase
         $this->io->write('<info>    Running an update to install dependent packages</info>')->shouldBeCalled();
 
         $config = $this->prophesize(Config::class);
-        $config->get('sort-packages')->willReturn(true);
-        $config->get(Argument::any())->willReturn(null);
+        $config->get('sort-packages')->willReturn($sortPackages)->shouldBeCalled();
 
         $rootPackage = $this->prophesize(RootPackageInterface::class);
-        $rootPackage->getRequires()->willReturn([]);
-        $rootPackage->getDevRequires()->willReturn([]);
-        $rootPackage->setRequires(Argument::that(function (array $arguments) {
-            if (count($arguments) !== 2) {
+        $rootPackage->getRequires()->willReturn([])->shouldBeCalled();
+        $rootPackage->getDevRequires()->willReturn([])->shouldNotBeCalled();
+        $rootPackage->setRequires(Argument::that(function (array $arguments) use ($packages) {
+            if (count($arguments) !== count($packages)) {
                 return false;
             }
 
-            if (! $this->assertSetRequiresArgument('my-package-foo', '2.37.1', $arguments)) {
-                return false;
-            }
-
-            if (! $this->assertSetRequiresArgument('other-package', 'dev-feature/branch', $arguments)) {
-                return false;
+            foreach ($packages as $package => $version) {
+                if (! $this->assertSetRequiresArgument($package, $version, $arguments)) {
+                    return false;
+                }
             }
 
             return true;
         }))->shouldBeCalled();
 
-        $this->composer->getPackage()->willReturn($rootPackage);
-        $this->composer->getConfig()->willReturn($config->reveal());
+        $this->composer->getPackage()->willReturn($rootPackage)->shouldBeCalled();
+        $this->composer->getConfig()->willReturn($config->reveal())->shouldBeCalled();
 
         $this->setUpComposerJson();
-        $this->setUpComposerInstaller(['my-package-foo', 'other-package']);
+        $this->setUpComposerInstaller(array_keys($packages));
 
         $this->assertNull($this->plugin->onPostCommand($this->getCommandEvent()));
 
         $json = file_get_contents(vfsStream::url('project/composer.json'));
         $composer = json_decode($json, true);
-        $this->assertTrue(isset($composer['require']['my-package-foo']));
-        $this->assertSame('2.37.1', $composer['require']['my-package-foo']);
-        $this->assertTrue(isset($composer['require']['other-package']));
-        $this->assertSame('dev-feature/branch', $composer['require']['other-package']);
+        foreach ($packages as $package => $version) {
+            $this->assertTrue(isset($composer['require'][$package]));
+            $this->assertSame($version, $composer['require'][$package]);
+        }
+        $this->assertSame($result, json_encode($composer['require']));
     }
 
-    public function testDoNothingWhenThereIsNoExtraDependencies()
+    public function operation()
     {
-        /** @var PackageInterface|ObjectProphecy $package */
-        $package = $this->prophesize(PackageInterface::class);
-        $package->getName()->willReturn('some/component');
-        $package->getExtra()->willReturn([]);
+        return [
+            'install' => [InstallOperation::class],
+            'update' => [UpdateOperation::class],
+        ];
+    }
 
-        $operation = $this->prophesize(InstallOperation::class);
-        $operation->getPackage()->willReturn($package->reveal());
-
-        $event = $this->prophesize(PackageEvent::class);
-        $event->isDevMode()->willReturn(true);
-        $event->getOperation()->willReturn($operation->reveal())->shouldBeCalled();
+    /**
+     * @dataProvider operation
+     *
+     * @param string $operation
+     */
+    public function testDoNothingWhenThereIsNoExtraDependencies($operation)
+    {
+        $event = $this->getPackageEvent('some/component', [], $operation);
 
         $this->io->isInteractive()->willReturn(true)->shouldBeCalled();
 
-        $this->assertNull($this->plugin->onPostPackage($event->reveal()));
+        $this->assertNull($this->plugin->onPostPackage($event));
         $this->assertPackagesToInstall([]);
     }
 
-    public function testDependencyAlreadyIsInRequireSection()
+    /**
+     * @dataProvider operation
+     *
+     * @param string $operation
+     */
+    public function testDependencyAlreadyIsInRequireSection($operation)
     {
-        /** @var PackageInterface|ObjectProphecy $package */
-        $package = $this->prophesize(PackageInterface::class);
-        $package->getName()->willReturn('some/component');
-        $package->getExtra()->willReturn([
+        $event = $this->getPackageEvent('some/component', [
             'dependency' => [
                 'extra-dependency-foo',
             ],
-        ]);
-
-        $operation = $this->prophesize(InstallOperation::class);
-        $operation->getPackage()->willReturn($package->reveal());
-
-        $event = $this->prophesize(PackageEvent::class);
-        $event->isDevMode()->willReturn(true);
-        $event->getOperation()->willReturn($operation->reveal())->shouldBeCalled();
+        ], $operation);
 
         $this->io->isInteractive()->willReturn(true)->shouldBeCalled();
         $this->io->askAndValidate(Argument::any())->shouldNotBeCalled();
@@ -308,27 +371,22 @@ class PluginTest extends TestCase
 
         $this->composer->getPackage()->willReturn($rootPackage);
 
-        $this->assertNull($this->plugin->onPostPackage($event->reveal()));
+        $this->assertNull($this->plugin->onPostPackage($event));
         $this->assertPackagesToInstall([]);
     }
 
-    public function testDependencyAlreadyIsInRequireDevSection()
+    /**
+     * @dataProvider operation
+     *
+     * @param string $operation
+     */
+    public function testDependencyAlreadyIsInRequireDevSection($operation)
     {
-        /** @var PackageInterface|ObjectProphecy $package */
-        $package = $this->prophesize(PackageInterface::class);
-        $package->getName()->willReturn('some/component');
-        $package->getExtra()->willReturn([
+        $event = $this->getPackageEvent('some/component', [
             'dependency' => [
                 'extra-dependency-foo',
             ],
-        ]);
-
-        $operation = $this->prophesize(InstallOperation::class);
-        $operation->getPackage()->willReturn($package->reveal());
-
-        $event = $this->prophesize(PackageEvent::class);
-        $event->isDevMode()->willReturn(true);
-        $event->getOperation()->willReturn($operation->reveal());
+        ], $operation);
 
         $this->io->isInteractive()->willReturn(true)->shouldBeCalled();
         $this->io->askAndValidate(Argument::any())->shouldNotBeCalled();
@@ -342,27 +400,22 @@ class PluginTest extends TestCase
 
         $this->composer->getPackage()->willReturn($rootPackage);
 
-        $this->assertNull($this->plugin->onPostPackage($event->reveal()));
+        $this->assertNull($this->plugin->onPostPackage($event));
         $this->assertPackagesToInstall([]);
     }
 
-    public function testInstallSingleDependencyOnPackageUpdate()
+    /**
+     * @dataProvider operation
+     *
+     * @param string $operation
+     */
+    public function testInstallSingleDependency($operation)
     {
-        /** @var PackageInterface|ObjectProphecy $package */
-        $package = $this->prophesize(PackageInterface::class);
-        $package->getName()->willReturn('some/component');
-        $package->getExtra()->willReturn([
+        $event = $this->getPackageEvent('some/component', [
             'dependency' => [
                 'extra-dependency-foo',
             ],
-        ]);
-
-        $operation = $this->prophesize(UpdateOperation::class);
-        $operation->getTargetPackage()->willReturn($package->reveal());
-
-        $event = $this->prophesize(PackageEvent::class);
-        $event->isDevMode()->willReturn(true);
-        $event->getOperation()->willReturn($operation->reveal());
+        ], $operation);
 
         $this->io->isInteractive()->willReturn(true)->shouldBeCalled();
         $this->io->askAndValidate(Argument::any())->shouldNotBeCalled();
@@ -399,68 +452,23 @@ class PluginTest extends TestCase
             })
         )->willReturn('17.0.1-dev');
 
-        $this->assertNull($this->plugin->onPostPackage($event->reveal()));
+        $this->assertNull($this->plugin->onPostPackage($event));
         $this->assertPackagesToInstall(['extra-dependency-foo' => '17.0.1-dev']);
     }
 
-    public function testInstallSingleDependencyOnPackageInstall()
+    /**
+     * @dataProvider operation
+     *
+     * @param string $operation
+     */
+    public function testInstallOneDependenciesWhenOneIsAlreadyInstalled($operation)
     {
-        /** @var PackageInterface|ObjectProphecy $package */
-        $package = $this->prophesize(PackageInterface::class);
-        $package->getName()->willReturn('some/component');
-        $package->getExtra()->willReturn([
-            'dependency' => [
-                'extra-dependency-foo',
-            ],
-        ]);
-
-        $operation = $this->prophesize(InstallOperation::class);
-        $operation->getPackage()->willReturn($package->reveal());
-
-        $event = $this->prophesize(PackageEvent::class);
-        $event->isDevMode()->willReturn(true);
-        $event->getOperation()->willReturn($operation->reveal());
-
-        $config = $this->prophesize(Config::class);
-        $config->get('sort-packages')->willReturn(true);
-        $config->get(Argument::any())->willReturn(null);
-
-        $rootPackage = $this->prophesize(RootPackageInterface::class);
-        $rootPackage->getRequires()->willReturn([]);
-        $rootPackage->getDevRequires()->willReturn([]);
-
-        $this->composer->getPackage()->willReturn($rootPackage);
-        $this->composer->getConfig()->willReturn($config->reveal());
-
-        $this->io->isInteractive()->willReturn(true);
-        $this->io->askAndValidate(
-            'Enter the version of <info>extra-dependency-foo</info> to require'
-                . ' (or leave blank to use the latest version): ',
-            Argument::type('callable')
-        )->willReturn('17.0.1-dev');
-
-        $this->assertNull($this->plugin->onPostPackage($event->reveal()));
-        $this->assertPackagesToInstall(['extra-dependency-foo' => '17.0.1-dev']);
-    }
-
-    public function testInstallOneDependenciesWhenOneIsAlreadyInstalled()
-    {
-        /** @var PackageInterface|ObjectProphecy $package */
-        $package = $this->prophesize(PackageInterface::class);
-        $package->getName()->willReturn('some/component');
-        $package->getExtra()->willReturn([
+        $event = $this->getPackageEvent('some/component', [
             'dependency' => [
                 'extra-dependency-foo',
                 'extra-dependency-bar',
             ],
-        ]);
-
-        $operation = $this->prophesize(InstallOperation::class);
-        $operation->getPackage()->willReturn($package->reveal());
-
-        $event = $this->prophesize(PackageEvent::class);
-        $event->isDevMode()->willReturn(true);
-        $event->getOperation()->willReturn($operation->reveal());
+        ], $operation);
 
         $config = $this->prophesize(Config::class);
         $config->get('sort-packages')->willReturn(true);
@@ -483,39 +491,24 @@ class PluginTest extends TestCase
             Argument::type('callable')
         )->willReturn('17.0.1-dev');
 
-        $this->assertNull($this->plugin->onPostPackage($event->reveal()));
+        $this->assertNull($this->plugin->onPostPackage($event));
         $this->assertPackagesToInstall(['extra-dependency-foo' => '17.0.1-dev']);
     }
 
-    public function testInstallSingleDependencyAndAutomaticallyChooseLatestVersion()
+    /**
+     * @dataProvider operation
+     *
+     * @param string $operation
+     */
+    public function testInstallSingleDependencyAndAutomaticallyChooseLatestVersion($operation)
     {
-        /** @var PackageInterface|ObjectProphecy $package */
-        $package = $this->prophesize(PackageInterface::class);
-        $package->getName()->willReturn('some/component');
-        $package->getExtra()->willReturn([
+        $event = $this->getPackageEvent('some/component', [
             'dependency' => [
                 'extra-dependency-foo',
             ],
-        ]);
+        ], $operation);
 
-        $operation = $this->prophesize(InstallOperation::class);
-        $operation->getPackage()->willReturn($package->reveal());
-
-        $event = $this->prophesize(PackageEvent::class);
-        $event->isDevMode()->willReturn(true);
-        $event->getOperation()->willReturn($operation->reveal());
-
-        $config = $this->prophesize(Config::class);
-        $config->get('sort-packages')->willReturn(true);
-        $config->get(Argument::any())->willReturn(null);
-
-        $rootPackage = $this->prophesize(RootPackageInterface::class);
-        $rootPackage->getRequires()->willReturn([]);
-        $rootPackage->getDevRequires()->willReturn([]);
-        $rootPackage->getMinimumStability()->willReturn('stable');
-
-        $this->composer->getPackage()->willReturn($rootPackage);
-        $this->composer->getConfig()->willReturn($config->reveal());
+        $this->setUpRootPackage();
 
         $this->io->isInteractive()->willReturn(true);
         $this->io->askAndValidate(
@@ -539,39 +532,24 @@ class PluginTest extends TestCase
         $this->setUpVersionSelector($versionSelector->reveal());
         $this->setUpPool();
 
-        $this->assertNull($this->plugin->onPostPackage($event->reveal()));
+        $this->assertNull($this->plugin->onPostPackage($event));
         $this->assertPackagesToInstall(['extra-dependency-foo' => '13.4.2']);
     }
 
-    public function testInstallSingleDependencyAndAutomaticallyChooseLatestVersionNotFoundMatchingPackage()
+    /**
+     * @dataProvider operation
+     *
+     * @param string $operation
+     */
+    public function testInstallSingleDependencyAndAutomaticallyChooseLatestVersionNotFoundMatchingPackage($operation)
     {
-        /** @var PackageInterface|ObjectProphecy $package */
-        $package = $this->prophesize(PackageInterface::class);
-        $package->getName()->willReturn('some/component');
-        $package->getExtra()->willReturn([
+        $event = $this->getPackageEvent('some/component', [
             'dependency' => [
                 'extra-dependency-foo',
             ],
-        ]);
+        ], $operation);
 
-        $operation = $this->prophesize(InstallOperation::class);
-        $operation->getPackage()->willReturn($package->reveal());
-
-        $event = $this->prophesize(PackageEvent::class);
-        $event->isDevMode()->willReturn(true);
-        $event->getOperation()->willReturn($operation->reveal());
-
-        $config = $this->prophesize(Config::class);
-        $config->get('sort-packages')->willReturn(true);
-        $config->get(Argument::any())->willReturn(null);
-
-        $rootPackage = $this->prophesize(RootPackageInterface::class);
-        $rootPackage->getRequires()->willReturn([]);
-        $rootPackage->getDevRequires()->willReturn([]);
-        $rootPackage->getMinimumStability()->willReturn('stable');
-
-        $this->composer->getPackage()->willReturn($rootPackage);
-        $this->composer->getConfig()->willReturn($config->reveal());
+        $this->setUpRootPackage([], [], 'stable-foo');
 
         $this->io->isInteractive()->willReturn(true);
         $this->io->askAndValidate(
@@ -580,22 +558,27 @@ class PluginTest extends TestCase
             Argument::type('callable')
         )->willReturn(false);
 
-        $this->setUpComposerJson();
-
         $versionSelector = $this->prophesize(VersionSelector::class);
-        $versionSelector->findBestCandidate('extra-dependency-foo', null, null, 'stable')->willReturn(null);
+        $versionSelector->findBestCandidate('extra-dependency-foo', null, null, 'stable')
+            ->willReturn(null)
+            ->shouldBeCalledTimes(1);
 
         $this->setUpVersionSelector($versionSelector->reveal());
         $this->setUpPool();
 
         $this->expectException(\InvalidArgumentException::class);
         $this->expectExceptionMessage(
-            'Could not find package extra-dependency-foo at any version for your minimum-stability'
+            'Could not find package extra-dependency-foo at any version for your minimum-stability (stable-foo)'
         );
-        $this->plugin->onPostPackage($event->reveal());
+        $this->plugin->onPostPackage($event);
     }
 
-    public function testUpdateComposerWithCurrentlyInstalledVersion()
+    /**
+     * @dataProvider operation
+     *
+     * @param string $operation
+     */
+    public function testUpdateComposerWithCurrentlyInstalledVersion($operation)
     {
         $installedPackage = $this->prophesize(PackageInterface::class);
         $installedPackage->getName()->willReturn('extra-dependency-foo');
@@ -604,33 +587,13 @@ class PluginTest extends TestCase
         $this->localRepository->getPackages()->willReturn([$installedPackage->reveal()]);
         $this->plugin->activate($this->composer->reveal(), $this->io->reveal());
 
-        /** @var PackageInterface|ObjectProphecy $package */
-        $package = $this->prophesize(PackageInterface::class);
-        $package->getName()->willReturn('some/component');
-        $package->getExtra()->willReturn([
+        $event = $this->getPackageEvent('some/component', [
             'dependency' => [
                 'extra-dependency-foo',
             ],
-        ]);
+        ], $operation);
 
-        $operation = $this->prophesize(InstallOperation::class);
-        $operation->getPackage()->willReturn($package->reveal());
-
-        $event = $this->prophesize(PackageEvent::class);
-        $event->isDevMode()->willReturn(true);
-        $event->getOperation()->willReturn($operation->reveal());
-
-        $config = $this->prophesize(Config::class);
-        $config->get('sort-packages')->willReturn(true);
-        $config->get(Argument::any())->willReturn(null);
-
-        $rootPackage = $this->prophesize(RootPackageInterface::class);
-        $rootPackage->getRequires()->willReturn([]);
-        $rootPackage->getDevRequires()->willReturn([]);
-        $rootPackage->getMinimumStability()->willReturn('stable');
-
-        $this->composer->getPackage()->willReturn($rootPackage);
-        $this->composer->getConfig()->willReturn($config->reveal());
+        $this->setUpRootPackage();
 
         $this->io->isInteractive()->willReturn(true);
         $this->io
@@ -640,42 +603,27 @@ class PluginTest extends TestCase
             )
             ->shouldBeCalled();
 
-        $this->assertNull($this->plugin->onPostPackage($event->reveal()));
+        $this->assertNull($this->plugin->onPostPackage($event));
         $this->assertPackagesToInstall(['extra-dependency-foo' => '^0.5.1']);
     }
 
-    public function testDependencyOrChoosePackageToInstall()
+    /**
+     * @dataProvider operation
+     *
+     * @param string $operation
+     */
+    public function testDependencyOrChoosePackageToInstall($operation)
     {
-        /** @var PackageInterface|ObjectProphecy $package */
-        $package = $this->prophesize(PackageInterface::class);
-        $package->getName()->willReturn('some/component');
-        $package->getExtra()->willReturn([
+        $event = $this->getPackageEvent('some/component', [
             'dependency-or' => [
                 'My question foo bar baz' => [
                     'extra-dependency-foo',
                     'extra-dependency-bar',
                 ],
             ],
-        ]);
+        ], $operation);
 
-        $operation = $this->prophesize(InstallOperation::class);
-        $operation->getPackage()->willReturn($package->reveal());
-
-        $event = $this->prophesize(PackageEvent::class);
-        $event->isDevMode()->willReturn(true);
-        $event->getOperation()->willReturn($operation->reveal());
-
-        $config = $this->prophesize(Config::class);
-        $config->get('sort-packages')->willReturn(true);
-        $config->get(Argument::any())->willReturn(null);
-
-        $rootPackage = $this->prophesize(RootPackageInterface::class);
-        $rootPackage->getRequires()->willReturn([]);
-        $rootPackage->getDevRequires()->willReturn([]);
-        $rootPackage->getMinimumStability()->willReturn('stable');
-
-        $this->composer->getPackage()->willReturn($rootPackage);
-        $this->composer->getConfig()->willReturn($config->reveal());
+        $this->setUpRootPackage();
 
         $this->io->isInteractive()->willReturn(true);
         $this->io
@@ -743,11 +691,16 @@ class PluginTest extends TestCase
         $this->setUpVersionSelector($versionSelector->reveal());
         $this->setUpPool();
 
-        $this->assertNull($this->plugin->onPostPackage($event->reveal()));
+        $this->assertNull($this->plugin->onPostPackage($event));
         $this->assertPackagesToInstall(['extra-dependency-bar' => '13.4.2']);
     }
 
-    public function testDependencyOrOnePackageIsAlreadyInstalledAndShouldBeAddedIntoRootComposer()
+    /**
+     * @dataProvider operation
+     *
+     * @param string $operation
+     */
+    public function testDependencyOrOnePackageIsAlreadyInstalledAndShouldBeAddedIntoRootComposer($operation)
     {
         $installedPackage = $this->prophesize(PackageInterface::class);
         $installedPackage->getName()->willReturn('extra-dependency-baz');
@@ -756,36 +709,16 @@ class PluginTest extends TestCase
         $this->localRepository->getPackages()->willReturn([$installedPackage->reveal()]);
         $this->plugin->activate($this->composer->reveal(), $this->io->reveal());
 
-        /** @var PackageInterface|ObjectProphecy $package */
-        $package = $this->prophesize(PackageInterface::class);
-        $package->getName()->willReturn('some/component');
-        $package->getExtra()->willReturn([
+        $event = $this->getPackageEvent('some/component', [
             'dependency-or' => [
                 'Choose something' => [
                     'extra-dependency-bar',
                     'extra-dependency-baz',
                 ],
             ],
-        ]);
+        ], $operation);
 
-        $operation = $this->prophesize(InstallOperation::class);
-        $operation->getPackage()->willReturn($package->reveal());
-
-        $event = $this->prophesize(PackageEvent::class);
-        $event->isDevMode()->willReturn(true);
-        $event->getOperation()->willReturn($operation->reveal());
-
-        $config = $this->prophesize(Config::class);
-        $config->get('sort-packages')->willReturn(true);
-        $config->get(Argument::any())->willReturn(null);
-
-        $rootPackage = $this->prophesize(RootPackageInterface::class);
-        $rootPackage->getRequires()->willReturn([]);
-        $rootPackage->getDevRequires()->willReturn([]);
-        $rootPackage->getMinimumStability()->willReturn('stable');
-
-        $this->composer->getPackage()->willReturn($rootPackage);
-        $this->composer->getConfig()->willReturn($config->reveal());
+        $this->setUpRootPackage();
 
         $this->io->isInteractive()->willReturn(true);
         $this->io
@@ -800,88 +733,53 @@ class PluginTest extends TestCase
 
         $this->setUpPool();
 
-        $this->assertNull($this->plugin->onPostPackage($event->reveal()));
+        $this->assertNull($this->plugin->onPostPackage($event));
         $this->assertPackagesToInstall(['extra-dependency-baz' => '^3.7.1']);
     }
 
-    public function testDependencyOrOnePackageIsAlreadyInRootComposer()
+    /**
+     * @dataProvider operation
+     *
+     * @param string $operation
+     */
+    public function testDependencyOrOnePackageIsAlreadyInRootComposer($operation)
     {
-        /** @var PackageInterface|ObjectProphecy $package */
-        $package = $this->prophesize(PackageInterface::class);
-        $package->getName()->willReturn('some/component');
-        $package->getExtra()->willReturn([
+        $event = $this->getPackageEvent('some/component', [
             'dependency-or' => [
                 'Choose something' => [
                     'extra-dependency-foo',
                     'extra-dependency-baz',
                 ],
             ],
-        ]);
-
-        $operation = $this->prophesize(InstallOperation::class);
-        $operation->getPackage()->willReturn($package->reveal());
-
-        $event = $this->prophesize(PackageEvent::class);
-        $event->isDevMode()->willReturn(true);
-        $event->getOperation()->willReturn($operation->reveal());
-
-        $config = $this->prophesize(Config::class);
-        $config->get('sort-packages')->willReturn(true);
-        $config->get(Argument::any())->willReturn(null);
+        ], $operation);
 
         $link = $this->prophesize(Link::class);
         $link->getTarget()->willReturn('extra-dependency-bar');
 
-        $rootPackage = $this->prophesize(RootPackageInterface::class);
-        $rootPackage->getRequires()->willReturn(['extra-dependency-foo' => $link]);
-        $rootPackage->getDevRequires()->willReturn([]);
-        $rootPackage->getMinimumStability()->willReturn('stable');
-
-        $this->composer->getPackage()->willReturn($rootPackage);
-        $this->composer->getConfig()->willReturn($config->reveal());
+        $this->setUpRootPackage(['extra-dependency-foo' => $link]);
 
         $this->io->isInteractive()->willReturn(true)->shouldBeCalledTimes(1);
         $this->io
             ->askAndValidate(Argument::any(), Argument::any())
             ->shouldNotBeCalled();
 
-        $this->assertNull($this->plugin->onPostPackage($event->reveal()));
+        $this->assertNull($this->plugin->onPostPackage($event));
         $this->assertPackagesToInstall([]);
     }
 
-    public function testDependencyOrWrongDefinitionThrowsException()
+    /**
+     * @dataProvider operation
+     *
+     * @param string $operation
+     */
+    public function testDependencyOrWrongDefinitionThrowsException($operation)
     {
-        /** @var PackageInterface|ObjectProphecy $package */
-        $package = $this->prophesize(PackageInterface::class);
-        $package->getName()->willReturn('some/component');
-        $package->getExtra()->willReturn([
+        $event = $this->getPackageEvent('some/component', [
             'dependency-or' => [
                 'extra-dependency-foo',
                 'extra-dependency-baz',
             ],
-        ]);
-
-        $operation = $this->prophesize(InstallOperation::class);
-        $operation->getPackage()->willReturn($package->reveal());
-
-        $event = $this->prophesize(PackageEvent::class);
-        $event->isDevMode()->willReturn(true);
-        $event->getOperation()->willReturn($operation->reveal());
-
-        $config = $this->prophesize(Config::class);
-        $config->get('sort-packages')->willReturn(true);
-        $config->get(Argument::any())->willReturn(null);
-
-        $link = $this->prophesize(Link::class);
-        $link->getTarget()->willReturn('extra-dependency-bar');
-
-        $rootPackage = $this->prophesize(RootPackageInterface::class);
-        $rootPackage->getRequires()->willReturn(['extra-dependency-foo' => $link]);
-        $rootPackage->getDevRequires()->willReturn([]);
-        $rootPackage->getMinimumStability()->willReturn('stable');
-
-        $this->composer->getPackage()->willReturn($rootPackage);
-        $this->composer->getConfig()->willReturn($config->reveal());
+        ], $operation);
 
         $this->io->isInteractive()->willReturn(true)->shouldBeCalledTimes(1);
         $this->io
@@ -890,15 +788,17 @@ class PluginTest extends TestCase
 
         $this->expectException(RuntimeException::class);
         $this->expectExceptionMessage('You must provide at least two optional dependencies.');
-        $this->assertNull($this->plugin->onPostPackage($event->reveal()));
+        $this->assertNull($this->plugin->onPostPackage($event));
     }
 
-    public function testIntegrationHandleDependencyAndDependencyOr()
+    /**
+     * @dataProvider operation
+     *
+     * @param string $operation
+     */
+    public function testIntegrationHandleDependencyAndDependencyOr($operation)
     {
-        /** @var PackageInterface|ObjectProphecy $package */
-        $package = $this->prophesize(PackageInterface::class);
-        $package->getName()->willReturn('some/component');
-        $package->getExtra()->willReturn([
+        $event = $this->getPackageEvent('some/component', [
             'dependency' => [
                 'extra-package-required',
             ],
@@ -909,26 +809,9 @@ class PluginTest extends TestCase
                     'extra-choose-three',
                 ],
             ],
-        ]);
+        ], $operation);
 
-        $operation = $this->prophesize(InstallOperation::class);
-        $operation->getPackage()->willReturn($package->reveal());
-
-        $event = $this->prophesize(PackageEvent::class);
-        $event->isDevMode()->willReturn(true);
-        $event->getOperation()->willReturn($operation->reveal());
-
-        $config = $this->prophesize(Config::class);
-        $config->get('sort-packages')->willReturn(true);
-        $config->get(Argument::any())->willReturn(null);
-
-        $rootPackage = $this->prophesize(RootPackageInterface::class);
-        $rootPackage->getRequires()->willReturn([]);
-        $rootPackage->getDevRequires()->willReturn([]);
-        $rootPackage->getMinimumStability()->willReturn('stable');
-
-        $this->composer->getPackage()->willReturn($rootPackage);
-        $this->composer->getConfig()->willReturn($config->reveal());
+        $this->setUpRootPackage();
 
         $this->io->isInteractive()->willReturn(true);
         $this->io
@@ -971,21 +854,27 @@ class PluginTest extends TestCase
         $this->io->write('Using version <info>3.9.1</info> for <info>extra-package-required</info>')->shouldBeCalled();
         $this->io->write('Using version <info>2.1.5</info> for <info>extra-choose-two</info>')->shouldBeCalled();
 
+        $package1 = $this->prophesize(PackageInterface::class)->reveal();
+        $package2 = $this->prophesize(PackageInterface::class)->reveal();
+
         $versionSelector = $this->prophesize(VersionSelector::class);
         $versionSelector->findBestCandidate('extra-package-required', null, null, 'stable')
-            ->willReturn($package->reveal())
+            ->willReturn($package1)
             ->shouldBeCalledTimes(1);
         $versionSelector->findBestCandidate('extra-choose-two', null, null, 'stable')
-            ->willReturn($package->reveal())
+            ->willReturn($package2)
             ->shouldBeCalledTimes(1);
-        $versionSelector->findRecommendedRequireVersion($package->reveal())
-            ->willReturn('3.9.1', '2.1.5')
-            ->shouldBeCalledTimes(2);
+        $versionSelector->findRecommendedRequireVersion($package1)
+            ->willReturn('3.9.1')
+            ->shouldBeCalledTimes(1);
+        $versionSelector->findRecommendedRequireVersion($package2)
+            ->willReturn('2.1.5')
+            ->shouldBeCalledTimes(1);
 
         $this->setUpVersionSelector($versionSelector->reveal());
         $this->setUpPool();
 
-        $this->assertNull($this->plugin->onPostPackage($event->reveal()));
+        $this->assertNull($this->plugin->onPostPackage($event));
         $this->assertPackagesToInstall([
             'extra-package-required' => '3.9.1',
             'extra-choose-two' => '2.1.5',
