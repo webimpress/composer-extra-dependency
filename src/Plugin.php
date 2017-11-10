@@ -228,10 +228,11 @@ class Plugin implements PluginInterface, EventSubscriberInterface
 
     private function promptForPackageSelection($question, array $packages)
     {
-        $ask = [sprintf('<question>%s</question>', $question)];
+        $ask = [sprintf('<question>%s</question>' . "\n", $question)];
         foreach ($packages as $i => $name) {
-            $ask[] = sprintf('[<comment>%d</comment>] %s', $i + 1, $name);
+            $ask[] = sprintf('  [<comment>%d</comment>] %s' . "\n", $i + 1, $name);
         }
+        $ask[] = '  Make your selection: ';
 
         do {
             $package = $this->io->askAndValidate(

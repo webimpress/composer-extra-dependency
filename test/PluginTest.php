@@ -717,10 +717,11 @@ class PluginTest extends TestCase
                         return false;
                     }
 
-                    Assert::assertCount(3, $arg);
-                    Assert::assertSame('<question>My question foo bar baz</question>', $arg[0]);
-                    Assert::assertSame('[<comment>1</comment>] extra-dependency-foo', $arg[1]);
-                    Assert::assertSame('[<comment>2</comment>] extra-dependency-bar', $arg[2]);
+                    Assert::assertCount(4, $arg);
+                    Assert::assertSame('<question>My question foo bar baz</question>' . "\n", $arg[0]);
+                    Assert::assertSame('  [<comment>1</comment>] extra-dependency-foo' . "\n", $arg[1]);
+                    Assert::assertSame('  [<comment>2</comment>] extra-dependency-bar' . "\n", $arg[2]);
+                    Assert::assertSame('  Make your selection: ', $arg[3]);
 
                     return true;
                 }),
@@ -1016,11 +1017,12 @@ class PluginTest extends TestCase
                         return false;
                     }
 
-                    Assert::assertCount(4, $arg);
-                    Assert::assertSame('<question>Choose something</question>', $arg[0]);
-                    Assert::assertSame('[<comment>1</comment>] extra-choose-one', $arg[1]);
-                    Assert::assertSame('[<comment>2</comment>] extra-choose-two', $arg[2]);
-                    Assert::assertSame('[<comment>3</comment>] extra-choose-three', $arg[3]);
+                    Assert::assertCount(5, $arg);
+                    Assert::assertSame('<question>Choose something</question>' . "\n", $arg[0]);
+                    Assert::assertSame('  [<comment>1</comment>] extra-choose-one' . "\n", $arg[1]);
+                    Assert::assertSame('  [<comment>2</comment>] extra-choose-two' . "\n", $arg[2]);
+                    Assert::assertSame('  [<comment>3</comment>] extra-choose-three' . "\n", $arg[3]);
+                    Assert::assertSame('  Make your selection: ', $arg[4]);
 
                     return true;
                 }),
