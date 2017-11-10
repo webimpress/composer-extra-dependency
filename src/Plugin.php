@@ -21,6 +21,7 @@ use Composer\Plugin\PluginInterface;
 use Composer\Repository\CompositeRepository;
 use Composer\Repository\PlatformRepository;
 use Composer\Repository\RepositoryFactory;
+use Composer\Script\Event;
 use RuntimeException;
 
 class Plugin implements PluginInterface, EventSubscriberInterface
@@ -49,11 +50,16 @@ class Plugin implements PluginInterface, EventSubscriberInterface
     /** @var CompositeRepository */
     private $repos;
 
+    /** @var string[] */
+    private $packagesToInstall = [];
+
     public static function getSubscribedEvents()
     {
         return [
             'post-package-install' => 'onPostPackage',
             'post-package-update'  => 'onPostPackage',
+            'post-install-cmd' => 'onPostCommand',
+            'post-update-cmd'  => 'onPostCommand',
         ];
     }
 
@@ -65,6 +71,26 @@ class Plugin implements PluginInterface, EventSubscriberInterface
         $installedPackages = $this->composer->getRepositoryManager()->getLocalRepository()->getPackages();
         foreach ($installedPackages as $package) {
             $this->installedPackages[strtolower($package->getName())] = $package->getPrettyVersion();
+        }
+    }
+
+    public function onPostCommand(Event $event)
+    {
+        if (! $event->isDevMode()) {
+            // Do nothing in production mode.
+            return;
+        }
+
+        if (! $this->io->isInteractive()) {
+            // Do nothing in no-interactive mode
+            return;
+        }
+
+        if ($this->packagesToInstall) {
+            $this->updateComposerJson($this->packagesToInstall);
+
+            $rootPackage = $this->updateRootPackage($this->composer->getPackage(), $this->packagesToInstall);
+            $this->runInstaller($rootPackage, array_keys($this->packagesToInstall));
         }
     }
 
@@ -88,13 +114,9 @@ class Plugin implements PluginInterface, EventSubscriberInterface
         }
 
         $extra = $package->getExtra();
-        $packages = $this->andDependencies($extra) + $this->orDependencies($extra);
-        if ($packages) {
-            $this->updateComposerJson($packages);
 
-            $rootPackage = $this->updateRootPackage($this->composer->getPackage(), $packages);
-            $this->runInstaller($rootPackage, array_keys($packages));
-        }
+        $this->packagesToInstall += $this->andDependencies($extra);
+        $this->packagesToInstall += $this->orDependencies($extra);
     }
 
     private function andDependencies(array $extra)

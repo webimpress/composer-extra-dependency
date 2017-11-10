@@ -19,6 +19,7 @@ use Composer\Package\RootPackageInterface;
 use Composer\Package\Version\VersionSelector;
 use Composer\Repository\RepositoryManager;
 use Composer\Repository\WritableRepositoryInterface;
+use Composer\Script\Event;
 use org\bovigo\vfs\vfsStream;
 use PHPUnit\Framework\Assert;
 use PHPUnit\Framework\TestCase;
@@ -144,9 +145,21 @@ class PluginTest extends TestCase
         $subscribers = Plugin::getSubscribedEvents();
         $this->assertArrayHasKey('post-package-install', $subscribers);
         $this->assertArrayHasKey('post-package-update', $subscribers);
+        $this->assertArrayHasKey('post-install-cmd', $subscribers);
+        $this->assertArrayHasKey('post-update-cmd', $subscribers);
 
         $this->assertEquals('onPostPackage', $subscribers['post-package-install']);
         $this->assertEquals('onPostPackage', $subscribers['post-package-update']);
+        $this->assertEquals('onPostCommand', $subscribers['post-install-cmd']);
+        $this->assertEquals('onPostCommand', $subscribers['post-update-cmd']);
+    }
+
+    private function getCommandEvent($isDevMode = true)
+    {
+        $event = $this->prophesize(Event::class);
+        $event->isDevMode()->willReturn($isDevMode);
+
+        return $event->reveal();
     }
 
     public function testDoNothingIfItIsNotInDevMode()
@@ -155,6 +168,7 @@ class PluginTest extends TestCase
         $event->isDevMode()->willReturn(false);
 
         $this->assertNull($this->plugin->onPostPackage($event->reveal()));
+        $this->assertNull($this->plugin->onPostCommand($this->getCommandEvent(false)));
     }
 
     public function testDoNothingInNoInteractionMode()
@@ -184,6 +198,7 @@ class PluginTest extends TestCase
         $this->io->isInteractive()->willReturn(false);
 
         $this->assertNull($this->plugin->onPostPackage($event->reveal()));
+        $this->assertNull($this->plugin->onPostCommand($this->getCommandEvent()));
     }
 
     public function testDoNothingWhenThereIsNoExtraDependencies()
@@ -201,6 +216,7 @@ class PluginTest extends TestCase
         $event->getOperation()->willReturn($operation->reveal());
 
         $this->assertNull($this->plugin->onPostPackage($event->reveal()));
+        $this->assertNull($this->plugin->onPostCommand($this->getCommandEvent()));
     }
 
     public function testDependencyAlreadyIsInRequiredSection()
@@ -230,6 +246,7 @@ class PluginTest extends TestCase
         $this->composer->getPackage()->willReturn($rootPackage);
 
         $this->assertNull($this->plugin->onPostPackage($event->reveal()));
+        $this->assertNull($this->plugin->onPostCommand($this->getCommandEvent()));
     }
 
     public function testDependencyAlreadyIsInRequiredDevSection()
@@ -263,6 +280,7 @@ class PluginTest extends TestCase
         $this->composer->getPackage()->willReturn($rootPackage);
 
         $this->assertNull($this->plugin->onPostPackage($event->reveal()));
+        $this->assertNull($this->plugin->onPostCommand($this->getCommandEvent()));
     }
 
     public function testInstallSingleDependencyOnPackageUpdate()
@@ -337,6 +355,7 @@ class PluginTest extends TestCase
         $this->setUpComposerJson();
 
         $this->assertNull($this->plugin->onPostPackage($event->reveal()));
+        $this->assertNull($this->plugin->onPostCommand($this->getCommandEvent()));
     }
 
     public function testInstallSingleDependencyOnPackageInstall()
@@ -394,6 +413,7 @@ class PluginTest extends TestCase
         $this->setUpComposerJson();
 
         $this->assertNull($this->plugin->onPostPackage($event->reveal()));
+        $this->assertNull($this->plugin->onPostCommand($this->getCommandEvent()));
     }
 
     public function testInstallOneDependenciesWhenOneIsAlreadyInstalled()
@@ -459,6 +479,7 @@ class PluginTest extends TestCase
         $this->setUpComposerJson();
 
         $this->assertNull($this->plugin->onPostPackage($event->reveal()));
+        $this->assertNull($this->plugin->onPostCommand($this->getCommandEvent()));
 
         $json = file_get_contents(vfsStream::url('project/composer.json'));
         $composer = json_decode($json, true);
@@ -536,6 +557,7 @@ class PluginTest extends TestCase
         $this->setUpPool();
 
         $this->assertNull($this->plugin->onPostPackage($event->reveal()));
+        $this->assertNull($this->plugin->onPostCommand($this->getCommandEvent()));
 
         $json = file_get_contents(vfsStream::url('project/composer.json'));
         $composer = json_decode($json, true);
@@ -658,6 +680,7 @@ class PluginTest extends TestCase
         $this->setUpComposerJson();
 
         $this->assertNull($this->plugin->onPostPackage($event->reveal()));
+        $this->assertNull($this->plugin->onPostCommand($this->getCommandEvent()));
 
         $json = file_get_contents(vfsStream::url('project/composer.json'));
         $composer = json_decode($json, true);
@@ -782,6 +805,7 @@ class PluginTest extends TestCase
         $this->setUpPool();
 
         $this->assertNull($this->plugin->onPostPackage($event->reveal()));
+        $this->assertNull($this->plugin->onPostCommand($this->getCommandEvent()));
 
         $json = file_get_contents(vfsStream::url('project/composer.json'));
         $composer = json_decode($json, true);
@@ -860,6 +884,7 @@ class PluginTest extends TestCase
         $this->setUpPool();
 
         $this->assertNull($this->plugin->onPostPackage($event->reveal()));
+        $this->assertNull($this->plugin->onPostCommand($this->getCommandEvent()));
 
         $json = file_get_contents(vfsStream::url('project/composer.json'));
         $composer = json_decode($json, true);
@@ -1071,6 +1096,7 @@ class PluginTest extends TestCase
         $this->setUpPool();
 
         $this->assertNull($this->plugin->onPostPackage($event->reveal()));
+        $this->assertNull($this->plugin->onPostCommand($this->getCommandEvent()));
 
         $json = file_get_contents(vfsStream::url('project/composer.json'));
         $composer = json_decode($json, true);
