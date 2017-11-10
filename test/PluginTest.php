@@ -162,43 +162,100 @@ class PluginTest extends TestCase
         return $event->reveal();
     }
 
-    public function testDoNothingIfItIsNotInDevMode()
+    public function testPostPackageDoNothingInNoDevMode()
     {
         $event = $this->prophesize(PackageEvent::class);
         $event->isDevMode()->willReturn(false);
+        $event->getOperation()->shouldNotBeCalled();
 
         $this->assertNull($this->plugin->onPostPackage($event->reveal()));
+    }
+
+    public function testPostCommandDoNothingInNoDevMode()
+    {
         $this->assertNull($this->plugin->onPostCommand($this->getCommandEvent(false)));
     }
 
-    public function testDoNothingInNoInteractionMode()
+    public function testPostPackageDoNothingInNoInteractionMode()
     {
-        /** @var PackageInterface|ObjectProphecy $package */
-        $package = $this->prophesize(PackageInterface::class);
-        $package->getName()->willReturn('some/component');
-        $package->getExtra()->willReturn([
-            'dependency' => [
-                'extra-dependency-foo',
-            ],
-        ]);
-
-        $operation = $this->prophesize(InstallOperation::class);
-        $operation->getPackage()->willReturn($package->reveal());
-
         $event = $this->prophesize(PackageEvent::class);
         $event->isDevMode()->willReturn(true);
-        $event->getOperation()->willReturn($operation->reveal());
-
-        $rootPackage = $this->prophesize(RootPackageInterface::class);
-        $rootPackage->getRequires()->willReturn([]);
-        $rootPackage->getDevRequires()->willReturn([]);
-
-        $this->composer->getPackage()->willReturn($rootPackage);
+        $event->getOperation()->shouldNotBeCalled();
 
         $this->io->isInteractive()->willReturn(false);
 
         $this->assertNull($this->plugin->onPostPackage($event->reveal()));
+    }
+
+    private function injectPackages(array $packagesToInstall)
+    {
+        $p = new ReflectionProperty($this->plugin, 'packagesToInstall');
+        $p->setAccessible(true);
+
+        $p->setValue($this->plugin, $packagesToInstall);
+    }
+
+    public function testPostCommandDoNothingInNoInteractionMode()
+    {
+        $this->injectPackages([
+            'my-package-foo' => '2.37.1',
+            'other-package' => 'dev-feature/branch',
+        ]);
+
+        $this->io->isInteractive()->willReturn(false);
+
         $this->assertNull($this->plugin->onPostCommand($this->getCommandEvent()));
+    }
+
+    public function testPostCommandInstallPackagesAndUpdateComposer()
+    {
+        $this->injectPackages([
+            'my-package-foo' => '2.37.1',
+            'other-package' => 'dev-feature/branch',
+        ]);
+
+        $this->io->isInteractive()->willReturn(true);
+        $this->io->write('<info>    Updating composer.json</info>')->shouldBeCalled();
+        $this->io->write('<info>Updating root package</info>')->shouldBeCalled();
+        $this->io->write('<info>    Running an update to install dependent packages</info>')->shouldBeCalled();
+
+        $config = $this->prophesize(Config::class);
+        $config->get('sort-packages')->willReturn(true);
+        $config->get(Argument::any())->willReturn(null);
+
+        $rootPackage = $this->prophesize(RootPackageInterface::class);
+        $rootPackage->getRequires()->willReturn([]);
+        $rootPackage->getDevRequires()->willReturn([]);
+        $rootPackage->setRequires(Argument::that(function (array $arguments) {
+            if (count($arguments) !== 2) {
+                return false;
+            }
+
+            if (! $this->assertSetRequiresArgument('my-package-foo', '2.37.1', $arguments)) {
+                return false;
+            }
+
+            if (! $this->assertSetRequiresArgument('other-package', 'dev-feature/branch', $arguments)) {
+                return false;
+            }
+
+            return true;
+        }))->shouldBeCalled();
+
+        $this->composer->getPackage()->willReturn($rootPackage);
+        $this->composer->getConfig()->willReturn($config->reveal());
+
+        $this->setUpComposerJson();
+        $this->setUpComposerInstaller(['my-package-foo', 'other-package']);
+
+        $this->assertNull($this->plugin->onPostCommand($this->getCommandEvent()));
+
+        $json = file_get_contents(vfsStream::url('project/composer.json'));
+        $composer = json_decode($json, true);
+        $this->assertTrue(isset($composer['require']['my-package-foo']));
+        $this->assertSame('2.37.1', $composer['require']['my-package-foo']);
+        $this->assertTrue(isset($composer['require']['other-package']));
+        $this->assertSame('dev-feature/branch', $composer['require']['other-package']);
     }
 
     public function testDoNothingWhenThereIsNoExtraDependencies()
@@ -213,13 +270,15 @@ class PluginTest extends TestCase
 
         $event = $this->prophesize(PackageEvent::class);
         $event->isDevMode()->willReturn(true);
-        $event->getOperation()->willReturn($operation->reveal());
+        $event->getOperation()->willReturn($operation->reveal())->shouldBeCalled();
+
+        $this->io->isInteractive()->willReturn(true)->shouldBeCalled();
 
         $this->assertNull($this->plugin->onPostPackage($event->reveal()));
-        $this->assertNull($this->plugin->onPostCommand($this->getCommandEvent()));
+        $this->assertPackagesToInstall([]);
     }
 
-    public function testDependencyAlreadyIsInRequiredSection()
+    public function testDependencyAlreadyIsInRequireSection()
     {
         /** @var PackageInterface|ObjectProphecy $package */
         $package = $this->prophesize(PackageInterface::class);
@@ -235,21 +294,25 @@ class PluginTest extends TestCase
 
         $event = $this->prophesize(PackageEvent::class);
         $event->isDevMode()->willReturn(true);
-        $event->getOperation()->willReturn($operation->reveal());
+        $event->getOperation()->willReturn($operation->reveal())->shouldBeCalled();
+
+        $this->io->isInteractive()->willReturn(true)->shouldBeCalled();
+        $this->io->askAndValidate(Argument::any())->shouldNotBeCalled();
 
         $link = $this->prophesize(Link::class);
         $link->getTarget()->willReturn('extra-dependency-foo');
 
         $rootPackage = $this->prophesize(RootPackageInterface::class);
-        $rootPackage->getDevRequires()->willReturn(['extra-dependency-foo' => $link->reveal()]);
+        $rootPackage->getRequires()->willReturn(['extra-dependency-foo' => $link->reveal()])->shouldBeCalled();
+        $rootPackage->getDevRequires()->willReturn([])->shouldBeCalled();
 
         $this->composer->getPackage()->willReturn($rootPackage);
 
         $this->assertNull($this->plugin->onPostPackage($event->reveal()));
-        $this->assertNull($this->plugin->onPostCommand($this->getCommandEvent()));
+        $this->assertPackagesToInstall([]);
     }
 
-    public function testDependencyAlreadyIsInRequiredDevSection()
+    public function testDependencyAlreadyIsInRequireDevSection()
     {
         /** @var PackageInterface|ObjectProphecy $package */
         $package = $this->prophesize(PackageInterface::class);
@@ -280,7 +343,7 @@ class PluginTest extends TestCase
         $this->composer->getPackage()->willReturn($rootPackage);
 
         $this->assertNull($this->plugin->onPostPackage($event->reveal()));
-        $this->assertNull($this->plugin->onPostCommand($this->getCommandEvent()));
+        $this->assertPackagesToInstall([]);
     }
 
     public function testInstallSingleDependencyOnPackageUpdate()
@@ -311,17 +374,6 @@ class PluginTest extends TestCase
         $rootPackage = $this->prophesize(RootPackageInterface::class);
         $rootPackage->getRequires()->willReturn([]);
         $rootPackage->getDevRequires()->willReturn([]);
-        $rootPackage->setRequires(Argument::that(function (array $arguments) {
-            if (count($arguments) !== 1) {
-                return false;
-            }
-
-            if (! $this->assertSetRequiresArgument('extra-dependency-foo', '17.0.1-dev', $arguments)) {
-                return false;
-            }
-
-            return true;
-        }))->shouldBeCalled();
 
         $this->composer->getPackage()->willReturn($rootPackage);
         $this->composer->getConfig()->willReturn($config->reveal());
@@ -347,15 +399,8 @@ class PluginTest extends TestCase
             })
         )->willReturn('17.0.1-dev');
 
-        $this->io->write('<info>    Updating composer.json</info>')->shouldBeCalled();
-        $this->io->write('<info>Updating root package</info>')->shouldBeCalled();
-        $this->io->write('<info>    Running an update to install dependent packages</info>')->shouldBeCalled();
-
-        $this->setUpComposerInstaller(['extra-dependency-foo']);
-        $this->setUpComposerJson();
-
         $this->assertNull($this->plugin->onPostPackage($event->reveal()));
-        $this->assertNull($this->plugin->onPostCommand($this->getCommandEvent()));
+        $this->assertPackagesToInstall(['extra-dependency-foo' => '17.0.1-dev']);
     }
 
     public function testInstallSingleDependencyOnPackageInstall()
@@ -383,17 +428,6 @@ class PluginTest extends TestCase
         $rootPackage = $this->prophesize(RootPackageInterface::class);
         $rootPackage->getRequires()->willReturn([]);
         $rootPackage->getDevRequires()->willReturn([]);
-        $rootPackage->setRequires(Argument::that(function (array $arguments) {
-            if (count($arguments) !== 1) {
-                return false;
-            }
-
-            if (! $this->assertSetRequiresArgument('extra-dependency-foo', '17.0.1-dev', $arguments)) {
-                return false;
-            }
-
-            return true;
-        }))->shouldBeCalled();
 
         $this->composer->getPackage()->willReturn($rootPackage);
         $this->composer->getConfig()->willReturn($config->reveal());
@@ -405,15 +439,8 @@ class PluginTest extends TestCase
             Argument::type('callable')
         )->willReturn('17.0.1-dev');
 
-        $this->io->write('<info>    Updating composer.json</info>')->shouldBeCalled();
-        $this->io->write('<info>Updating root package</info>')->shouldBeCalled();
-        $this->io->write('<info>    Running an update to install dependent packages</info>')->shouldBeCalled();
-
-        $this->setUpComposerInstaller(['extra-dependency-foo']);
-        $this->setUpComposerJson();
-
         $this->assertNull($this->plugin->onPostPackage($event->reveal()));
-        $this->assertNull($this->plugin->onPostCommand($this->getCommandEvent()));
+        $this->assertPackagesToInstall(['extra-dependency-foo' => '17.0.1-dev']);
     }
 
     public function testInstallOneDependenciesWhenOneIsAlreadyInstalled()
@@ -445,21 +472,6 @@ class PluginTest extends TestCase
         $rootPackage = $this->prophesize(RootPackageInterface::class);
         $rootPackage->getRequires()->willReturn(['extra-dependency-bar' => $link->reveal()]);
         $rootPackage->getDevRequires()->willReturn([]);
-        $rootPackage->setRequires(Argument::that(function (array $arguments) {
-            if (count($arguments) !== 2) {
-                return false;
-            }
-
-            if (! $this->assertSetRequiresArgument('extra-dependency-foo', '17.0.1-dev', $arguments)) {
-                return false;
-            }
-
-            if (! isset($arguments['extra-dependency-bar'])) {
-                return false;
-            }
-
-            return true;
-        }))->shouldBeCalled();
 
         $this->composer->getPackage()->willReturn($rootPackage);
         $this->composer->getConfig()->willReturn($config->reveal());
@@ -471,20 +483,8 @@ class PluginTest extends TestCase
             Argument::type('callable')
         )->willReturn('17.0.1-dev');
 
-        $this->io->write('<info>    Updating composer.json</info>')->shouldBeCalled();
-        $this->io->write('<info>Updating root package</info>')->shouldBeCalled();
-        $this->io->write('<info>    Running an update to install dependent packages</info>')->shouldBeCalled();
-
-        $this->setUpComposerInstaller(['extra-dependency-foo']);
-        $this->setUpComposerJson();
-
         $this->assertNull($this->plugin->onPostPackage($event->reveal()));
-        $this->assertNull($this->plugin->onPostCommand($this->getCommandEvent()));
-
-        $json = file_get_contents(vfsStream::url('project/composer.json'));
-        $composer = json_decode($json, true);
-        $this->assertTrue(isset($composer['require']['extra-dependency-foo']));
-        $this->assertSame('17.0.1-dev', $composer['require']['extra-dependency-foo']);
+        $this->assertPackagesToInstall(['extra-dependency-foo' => '17.0.1-dev']);
     }
 
     public function testInstallSingleDependencyAndAutomaticallyChooseLatestVersion()
@@ -512,17 +512,6 @@ class PluginTest extends TestCase
         $rootPackage = $this->prophesize(RootPackageInterface::class);
         $rootPackage->getRequires()->willReturn([]);
         $rootPackage->getDevRequires()->willReturn([]);
-        $rootPackage->setRequires(Argument::that(function (array $arguments) {
-            if (count($arguments) !== 1) {
-                return false;
-            }
-
-            if (! $this->assertSetRequiresArgument('extra-dependency-foo', '13.4.2', $arguments)) {
-                return false;
-            }
-
-            return true;
-        }))->shouldBeCalled();
         $rootPackage->getMinimumStability()->willReturn('stable');
 
         $this->composer->getPackage()->willReturn($rootPackage);
@@ -535,13 +524,7 @@ class PluginTest extends TestCase
             Argument::type('callable')
         )->willReturn(false);
 
-        $this->io->write('<info>    Updating composer.json</info>')->shouldBeCalled();
-        $this->io->write('<info>Updating root package</info>')->shouldBeCalled();
-        $this->io->write('<info>    Running an update to install dependent packages</info>')->shouldBeCalled();
         $this->io->write('Using version <info>13.4.2</info> for <info>extra-dependency-foo</info>')->shouldBeCalled();
-
-        $this->setUpComposerInstaller(['extra-dependency-foo']);
-        $this->setUpComposerJson();
 
         $package = $this->prophesize(PackageInterface::class);
 
@@ -557,12 +540,7 @@ class PluginTest extends TestCase
         $this->setUpPool();
 
         $this->assertNull($this->plugin->onPostPackage($event->reveal()));
-        $this->assertNull($this->plugin->onPostCommand($this->getCommandEvent()));
-
-        $json = file_get_contents(vfsStream::url('project/composer.json'));
-        $composer = json_decode($json, true);
-        $this->assertTrue(isset($composer['require']['extra-dependency-foo']));
-        $this->assertSame('13.4.2', $composer['require']['extra-dependency-foo']);
+        $this->assertPackagesToInstall(['extra-dependency-foo' => '13.4.2']);
     }
 
     public function testInstallSingleDependencyAndAutomaticallyChooseLatestVersionNotFoundMatchingPackage()
@@ -649,17 +627,6 @@ class PluginTest extends TestCase
         $rootPackage = $this->prophesize(RootPackageInterface::class);
         $rootPackage->getRequires()->willReturn([]);
         $rootPackage->getDevRequires()->willReturn([]);
-        $rootPackage->setRequires(Argument::that(function (array $arguments) {
-            if (count($arguments) !== 1) {
-                return false;
-            }
-
-            if (! $this->assertSetRequiresArgument('extra-dependency-foo', '^0.5.1', $arguments)) {
-                return false;
-            }
-
-            return true;
-        }))->shouldBeCalled();
         $rootPackage->getMinimumStability()->willReturn('stable');
 
         $this->composer->getPackage()->willReturn($rootPackage);
@@ -672,20 +639,9 @@ class PluginTest extends TestCase
                     . ' <info>^0.5.1</info>; to upgrade, run <info>composer require extra-dependency-foo:VERSION</info>'
             )
             ->shouldBeCalled();
-        $this->io->write('<info>    Updating composer.json</info>')->shouldBeCalled();
-        $this->io->write('<info>Updating root package</info>')->shouldBeCalled();
-        $this->io->write('<info>    Running an update to install dependent packages</info>')->shouldBeCalled();
-
-        $this->setUpComposerInstaller(['extra-dependency-foo']);
-        $this->setUpComposerJson();
 
         $this->assertNull($this->plugin->onPostPackage($event->reveal()));
-        $this->assertNull($this->plugin->onPostCommand($this->getCommandEvent()));
-
-        $json = file_get_contents(vfsStream::url('project/composer.json'));
-        $composer = json_decode($json, true);
-        $this->assertTrue(isset($composer['require']['extra-dependency-foo']));
-        $this->assertSame('^0.5.1', $composer['require']['extra-dependency-foo']);
+        $this->assertPackagesToInstall(['extra-dependency-foo' => '^0.5.1']);
     }
 
     public function testDependencyOrChoosePackageToInstall()
@@ -716,17 +672,6 @@ class PluginTest extends TestCase
         $rootPackage = $this->prophesize(RootPackageInterface::class);
         $rootPackage->getRequires()->willReturn([]);
         $rootPackage->getDevRequires()->willReturn([]);
-        $rootPackage->setRequires(Argument::that(function (array $arguments) {
-            if (count($arguments) !== 1) {
-                return false;
-            }
-
-            if (! $this->assertSetRequiresArgument('extra-dependency-bar', '13.4.2', $arguments)) {
-                return false;
-            }
-
-            return true;
-        }))->shouldBeCalled();
         $rootPackage->getMinimumStability()->willReturn('stable');
 
         $this->composer->getPackage()->willReturn($rootPackage);
@@ -783,13 +728,7 @@ class PluginTest extends TestCase
             ->willReturn(false)
             ->shouldBeCalledTimes(1);
 
-        $this->io->write('<info>    Updating composer.json</info>')->shouldBeCalled();
-        $this->io->write('<info>Updating root package</info>')->shouldBeCalled();
-        $this->io->write('<info>    Running an update to install dependent packages</info>')->shouldBeCalled();
         $this->io->write('Using version <info>13.4.2</info> for <info>extra-dependency-bar</info>')->shouldBeCalled();
-
-        $this->setUpComposerInstaller(['extra-dependency-bar']);
-        $this->setUpComposerJson();
 
         $package = $this->prophesize(PackageInterface::class);
 
@@ -805,12 +744,7 @@ class PluginTest extends TestCase
         $this->setUpPool();
 
         $this->assertNull($this->plugin->onPostPackage($event->reveal()));
-        $this->assertNull($this->plugin->onPostCommand($this->getCommandEvent()));
-
-        $json = file_get_contents(vfsStream::url('project/composer.json'));
-        $composer = json_decode($json, true);
-        $this->assertTrue(isset($composer['require']['extra-dependency-bar']));
-        $this->assertSame('13.4.2', $composer['require']['extra-dependency-bar']);
+        $this->assertPackagesToInstall(['extra-dependency-bar' => '13.4.2']);
     }
 
     public function testDependencyOrOnePackageIsAlreadyInstalledAndShouldBeAddedIntoRootComposer()
@@ -848,17 +782,6 @@ class PluginTest extends TestCase
         $rootPackage = $this->prophesize(RootPackageInterface::class);
         $rootPackage->getRequires()->willReturn([]);
         $rootPackage->getDevRequires()->willReturn([]);
-        $rootPackage->setRequires(Argument::that(function (array $arguments) {
-            if (count($arguments) !== 1) {
-                return false;
-            }
-
-            if (! $this->assertSetRequiresArgument('extra-dependency-baz', '^3.7.1', $arguments)) {
-                return false;
-            }
-
-            return true;
-        }))->shouldBeCalled();
         $rootPackage->getMinimumStability()->willReturn('stable');
 
         $this->composer->getPackage()->willReturn($rootPackage);
@@ -875,21 +798,10 @@ class PluginTest extends TestCase
             ->askAndValidate(Argument::any(), Argument::any())
             ->shouldNotBeCalled();
 
-        $this->io->write('<info>    Updating composer.json</info>')->shouldBeCalled();
-        $this->io->write('<info>Updating root package</info>')->shouldBeCalled();
-        $this->io->write('<info>    Running an update to install dependent packages</info>')->shouldBeCalled();
-
-        $this->setUpComposerInstaller(['extra-dependency-baz']);
-        $this->setUpComposerJson();
         $this->setUpPool();
 
         $this->assertNull($this->plugin->onPostPackage($event->reveal()));
-        $this->assertNull($this->plugin->onPostCommand($this->getCommandEvent()));
-
-        $json = file_get_contents(vfsStream::url('project/composer.json'));
-        $composer = json_decode($json, true);
-        $this->assertTrue(isset($composer['require']['extra-dependency-baz']));
-        $this->assertSame('^3.7.1', $composer['require']['extra-dependency-baz']);
+        $this->assertPackagesToInstall(['extra-dependency-baz' => '^3.7.1']);
     }
 
     public function testDependencyOrOnePackageIsAlreadyInRootComposer()
@@ -923,7 +835,6 @@ class PluginTest extends TestCase
         $rootPackage = $this->prophesize(RootPackageInterface::class);
         $rootPackage->getRequires()->willReturn(['extra-dependency-foo' => $link]);
         $rootPackage->getDevRequires()->willReturn([]);
-        $rootPackage->setRequires(Argument::any())->shouldNotBeCalled();
         $rootPackage->getMinimumStability()->willReturn('stable');
 
         $this->composer->getPackage()->willReturn($rootPackage);
@@ -935,6 +846,7 @@ class PluginTest extends TestCase
             ->shouldNotBeCalled();
 
         $this->assertNull($this->plugin->onPostPackage($event->reveal()));
+        $this->assertPackagesToInstall([]);
     }
 
     public function testDependencyOrWrongDefinitionThrowsException()
@@ -966,7 +878,6 @@ class PluginTest extends TestCase
         $rootPackage = $this->prophesize(RootPackageInterface::class);
         $rootPackage->getRequires()->willReturn(['extra-dependency-foo' => $link]);
         $rootPackage->getDevRequires()->willReturn([]);
-        $rootPackage->setRequires(Argument::any())->shouldNotBeCalled();
         $rootPackage->getMinimumStability()->willReturn('stable');
 
         $this->composer->getPackage()->willReturn($rootPackage);
@@ -1014,21 +925,6 @@ class PluginTest extends TestCase
         $rootPackage = $this->prophesize(RootPackageInterface::class);
         $rootPackage->getRequires()->willReturn([]);
         $rootPackage->getDevRequires()->willReturn([]);
-        $rootPackage->setRequires(Argument::that(function (array $arguments) {
-            if (count($arguments) !== 2) {
-                return false;
-            }
-
-            if (! $this->assertSetRequiresArgument('extra-package-required', '3.9.1', $arguments)) {
-                return false;
-            }
-
-            if (! $this->assertSetRequiresArgument('extra-choose-two', '2.1.5', $arguments)) {
-                return false;
-            }
-
-            return true;
-        }))->shouldBeCalled();
         $rootPackage->getMinimumStability()->willReturn('stable');
 
         $this->composer->getPackage()->willReturn($rootPackage);
@@ -1072,14 +968,8 @@ class PluginTest extends TestCase
             ->willReturn(false)
             ->shouldBeCalledTimes(1);
 
-        $this->io->write('<info>    Updating composer.json</info>')->shouldBeCalled();
-        $this->io->write('<info>Updating root package</info>')->shouldBeCalled();
-        $this->io->write('<info>    Running an update to install dependent packages</info>')->shouldBeCalled();
         $this->io->write('Using version <info>3.9.1</info> for <info>extra-package-required</info>')->shouldBeCalled();
         $this->io->write('Using version <info>2.1.5</info> for <info>extra-choose-two</info>')->shouldBeCalled();
-
-        $this->setUpComposerInstaller(['extra-package-required', 'extra-choose-two']);
-        $this->setUpComposerJson();
 
         $versionSelector = $this->prophesize(VersionSelector::class);
         $versionSelector->findBestCandidate('extra-package-required', null, null, 'stable')
@@ -1096,14 +986,10 @@ class PluginTest extends TestCase
         $this->setUpPool();
 
         $this->assertNull($this->plugin->onPostPackage($event->reveal()));
-        $this->assertNull($this->plugin->onPostCommand($this->getCommandEvent()));
-
-        $json = file_get_contents(vfsStream::url('project/composer.json'));
-        $composer = json_decode($json, true);
-        $this->assertTrue(isset($composer['require']['extra-package-required']));
-        $this->assertSame('3.9.1', $composer['require']['extra-package-required']);
-        $this->assertTrue(isset($composer['require']['extra-choose-two']));
-        $this->assertSame('2.1.5', $composer['require']['extra-choose-two']);
+        $this->assertPackagesToInstall([
+            'extra-package-required' => '3.9.1',
+            'extra-choose-two' => '2.1.5',
+        ]);
     }
 
     private function assertSetRequiresArgument($name, $version, array $arguments)
@@ -1131,6 +1017,13 @@ class PluginTest extends TestCase
         }
 
         return true;
+    }
+
+    private function assertPackagesToInstall(array $packagesToInstall)
+    {
+        $p = new ReflectionProperty($this->plugin, 'packagesToInstall');
+        $p->setAccessible(true);
+        self::assertSame($packagesToInstall, $p->getValue($this->plugin));
     }
 
     public function testComposerInstallerFactory()
