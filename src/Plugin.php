@@ -22,6 +22,7 @@ use Composer\Repository\CompositeRepository;
 use Composer\Repository\PlatformRepository;
 use Composer\Repository\RepositoryFactory;
 use Composer\Script\Event;
+use InvalidArgumentException;
 use RuntimeException;
 
 class Plugin implements PluginInterface, EventSubscriberInterface
@@ -386,7 +387,7 @@ class Plugin implements PluginInterface, EventSubscriberInterface
         $package = $versionSelector->findBestCandidate($name, null, null, 'stable');
 
         if (! $package) {
-            throw new \InvalidArgumentException(sprintf(
+            throw new InvalidArgumentException(sprintf(
                 'Could not find package %s at any version for your minimum-stability (%s).'
                     . ' Check the package spelling or your minimum-stability',
                 $name,
