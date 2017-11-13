@@ -134,6 +134,11 @@ class Plugin implements PluginInterface, EventSubscriberInterface
         $packages = array_flip($deps);
 
         foreach ($packages as $package => &$constraint) {
+            if ($this->isPackageReadyToInstall($package)) {
+                unset($packages[$package]);
+                continue;
+            }
+
             if ($this->hasPackage($package)) {
                 unset($packages[$package]);
                 continue;
@@ -169,6 +174,11 @@ class Plugin implements PluginInterface, EventSubscriberInterface
             }
 
             foreach ($options as $package) {
+                if ($this->isPackageReadyToInstall($package)) {
+                    // Package has been already prepared to be installed, skipping.
+                    continue 2;
+                }
+
                 if ($this->hasPackage($package)) {
                     // Package from this group has been found in root composer, skipping.
                     continue 2;
@@ -319,10 +329,25 @@ class Plugin implements PluginInterface, EventSubscriberInterface
 
     private function hasPackage($package)
     {
+        $lower = strtolower($package);
+
         $rootPackage = $this->composer->getPackage();
         $requires = $rootPackage->getRequires() + $rootPackage->getDevRequires();
         foreach ($requires as $name => $link) {
-            if (strtolower($name) === strtolower($package)) {
+            if (strtolower($name) === $lower) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private function isPackageReadyToInstall($package)
+    {
+        $lower = strtolower($package);
+
+        foreach ($this->packagesToInstall as $name => $version) {
+            if (strtolower($name) === $lower) {
                 return true;
             }
         }

@@ -612,6 +612,36 @@ class PluginTest extends TestCase
      *
      * @param string $operation
      */
+    public function testDoNotInstallAskTwiceForTheSamePackage($operation)
+    {
+        $this->injectPackages([
+            'extra-package' => '^1.0.1',
+        ]);
+
+        $event = $this->getPackageEvent('some/component', [
+            'dependency' => [
+                'extra-package',
+            ],
+        ], $operation);
+
+        $this->composer->getPackage()->shouldNotBeCalled();
+
+        $this->io->isInteractive()->willReturn(true);
+        $this->io
+            ->askAndValidate(Argument::any(), Argument::type('callable'))
+            ->shouldNotBeCalled();
+
+        $this->assertNull($this->plugin->onPostPackage($event));
+        $this->assertPackagesToInstall([
+            'extra-package' => '^1.0.1',
+        ]);
+    }
+
+    /**
+     * @dataProvider operation
+     *
+     * @param string $operation
+     */
     public function testDependencyOrChoosePackageToInstall($operation)
     {
         $event = $this->getPackageEvent('some/component', [
@@ -878,6 +908,45 @@ class PluginTest extends TestCase
         $this->assertPackagesToInstall([
             'extra-package-required' => '3.9.1',
             'extra-choose-two' => '2.1.5',
+        ]);
+    }
+
+    /**
+     * @dataProvider operation
+     *
+     * @param string $operation
+     */
+    public function testIntegrationDoNotAskWhenAlreadyChosen($operation)
+    {
+        $event = $this->getPackageEvent('some/component', [
+            'dependency' => [
+                'extra-package-required',
+            ],
+            'dependency-or' => [
+                'Choose something' => [
+                    'extra-choose-one',
+                    'extra-choose-two',
+                    'extra-choose-three',
+                    'extra-package-required',
+                ],
+            ],
+        ], $operation);
+
+        $this->setUpRootPackage();
+
+        $this->io->isInteractive()->willReturn(true);
+        $this->io
+            ->askAndValidate(
+                'Enter the version of <info>extra-package-required</info> to require'
+                . ' (or leave blank to use the latest version): ',
+                Argument::type('callable')
+            )
+            ->willReturn('1.8.3')
+            ->shouldBeCalledTimes(1);
+
+        $this->assertNull($this->plugin->onPostPackage($event));
+        $this->assertPackagesToInstall([
+            'extra-package-required' => '1.8.3',
         ]);
     }
 
