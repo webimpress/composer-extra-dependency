@@ -21,6 +21,9 @@ use Composer\Plugin\PluginInterface;
 use Composer\Repository\CompositeRepository;
 use Composer\Repository\PlatformRepository;
 use Composer\Repository\RepositoryFactory;
+use Composer\Script\Event;
+use InvalidArgumentException;
+use RuntimeException;
 
 class Plugin implements PluginInterface, EventSubscriberInterface
 {
@@ -48,11 +51,16 @@ class Plugin implements PluginInterface, EventSubscriberInterface
     /** @var CompositeRepository */
     private $repos;
 
+    /** @var string[] */
+    private $packagesToInstall = [];
+
     public static function getSubscribedEvents()
     {
         return [
             'post-package-install' => 'onPostPackage',
             'post-package-update'  => 'onPostPackage',
+            'post-install-cmd' => 'onPostCommand',
+            'post-update-cmd'  => 'onPostCommand',
         ];
     }
 
@@ -63,7 +71,27 @@ class Plugin implements PluginInterface, EventSubscriberInterface
 
         $installedPackages = $this->composer->getRepositoryManager()->getLocalRepository()->getPackages();
         foreach ($installedPackages as $package) {
-            $this->installedPackages[$package->getName()] = $package->getPrettyVersion();
+            $this->installedPackages[strtolower($package->getName())] = $package->getPrettyVersion();
+        }
+    }
+
+    public function onPostCommand(Event $event)
+    {
+        if (! $event->isDevMode()) {
+            // Do nothing in production mode.
+            return;
+        }
+
+        if (! $this->io->isInteractive()) {
+            // Do nothing in no-interactive mode
+            return;
+        }
+
+        if ($this->packagesToInstall) {
+            $this->updateComposerJson($this->packagesToInstall);
+
+            $rootPackage = $this->updateRootPackage($this->composer->getPackage(), $this->packagesToInstall);
+            $this->runInstaller($rootPackage, array_keys($this->packagesToInstall));
         }
     }
 
@@ -85,36 +113,89 @@ class Plugin implements PluginInterface, EventSubscriberInterface
         } else {
             $package = $operation->getTargetPackage();
         }
-        $extra = $this->getExtraMetadata($package->getExtra());
-        if (empty($extra)) {
-            // Package does not define anything of interest; do nothing.
-            return;
+
+        $extra = $package->getExtra();
+
+        $this->packagesToInstall += $this->andDependencies($extra);
+        $this->packagesToInstall += $this->orDependencies($extra);
+    }
+
+    private function andDependencies(array $extra)
+    {
+        $deps = isset($extra['dependency']) && is_array($extra['dependency'])
+            ? $extra['dependency']
+            : [];
+
+        if (! $deps) {
+            // No defined any packages to install
+            return [];
         }
 
-        $packages = array_flip($extra);
+        $packages = array_flip($deps);
 
         foreach ($packages as $package => &$constraint) {
+            if ($this->isPackageReadyToInstall($package)) {
+                unset($packages[$package]);
+                continue;
+            }
+
             if ($this->hasPackage($package)) {
                 unset($packages[$package]);
                 continue;
             }
 
+            // Check if package is currently installed and use installed version.
+            if ($constraint = $this->getInstalledPackageConstraint($package)) {
+                continue;
+            }
+
+            // Package is not installed, then prompt user for the version.
             $constraint = $this->promptForPackageVersion($package);
         }
 
-        if ($packages) {
-            $this->updateComposerJson($packages);
-
-            $rootPackage = $this->updateRootPackage($this->composer->getPackage(), $packages);
-            $this->runInstaller($rootPackage, array_keys($packages));
-        }
+        return $packages;
     }
 
-    private function getExtraMetadata(array $extra)
+    private function orDependencies(array $extra)
     {
-        return isset($extra['dependency']) && is_array($extra['dependency'])
-            ? $extra['dependency']
+        $deps = isset($extra['dependency-or']) && is_array($extra['dependency-or'])
+            ? $extra['dependency-or']
             : [];
+
+        if (! $deps) {
+            // No any dependencies to choose defined in the package.
+            return [];
+        }
+
+        $packages = [];
+        foreach ($deps as $question => $options) {
+            if (! is_array($options) || count($options) < 2) {
+                throw new RuntimeException('You must provide at least two optional dependencies.');
+            }
+
+            foreach ($options as $package) {
+                if ($this->isPackageReadyToInstall($package)) {
+                    // Package has been already prepared to be installed, skipping.
+                    continue 2;
+                }
+
+                if ($this->hasPackage($package)) {
+                    // Package from this group has been found in root composer, skipping.
+                    continue 2;
+                }
+
+                // Check if package is currently installed, if so, use installed constraint and skip question.
+                if ($constraint = $this->getInstalledPackageConstraint($package)) {
+                    $packages[$package] = $constraint;
+                    continue 2;
+                }
+            }
+
+            $package = $this->promptForPackageSelection($question, $options);
+            $packages[$package] = $this->promptForPackageVersion($package);
+        }
+
+        return $packages;
     }
 
     private function updateRootPackage(RootPackageInterface $rootPackage, array $packages)
@@ -157,21 +238,55 @@ class Plugin implements PluginInterface, EventSubscriberInterface
         return $installer->run();
     }
 
-    private function promptForPackageVersion($name)
+    private function getInstalledPackageConstraint($package)
     {
-        // Package is currently installed. Add it to root composer.json
-        if (isset($this->installedPackages[$name])) {
-            $this->io->write(sprintf(
-                'Added package <info>%s</info> to composer.json with constraint <info>%s</info>;'
-                    . ' to upgrade, run <info>composer require %s:VERSION</info>',
-                $name,
-                '^' . $this->installedPackages[$name],
-                $name
-            ));
+        $lower = strtolower($package);
 
-            return '^' . $this->installedPackages[$name];
+        // Package is currently installed. Add it to root composer.json
+        if (! isset($this->installedPackages[$lower])) {
+            return null;
         }
 
+        $constraint = '^' . $this->installedPackages[$lower];
+        $this->io->write(sprintf(
+            'Added package <info>%s</info> to composer.json with constraint <info>%s</info>;'
+            . ' to upgrade, run <info>composer require %s:VERSION</info>',
+            $package,
+            $constraint,
+            $package
+        ));
+
+        return $constraint;
+    }
+
+    private function promptForPackageSelection($question, array $packages)
+    {
+        $ask = [sprintf('<question>%s</question>' . "\n", $question)];
+        foreach ($packages as $i => $name) {
+            $ask[] = sprintf('  [<comment>%d</comment>] %s' . "\n", $i + 1, $name);
+        }
+        $ask[] = '  Make your selection: ';
+
+        do {
+            $package = $this->io->askAndValidate(
+                $ask,
+                function ($input) use ($packages) {
+                    $input = is_numeric($input) ? (int) trim($input) : 0;
+
+                    if (isset($packages[$input - 1])) {
+                        return $packages[$input - 1];
+                    }
+
+                    return null;
+                }
+            );
+        } while (! $package);
+
+        return $package;
+    }
+
+    private function promptForPackageVersion($name)
+    {
         $constraint = $this->io->askAndValidate(
             sprintf(
                 'Enter the version of <info>%s</info> to require (or leave blank to use the latest version): ',
@@ -214,10 +329,25 @@ class Plugin implements PluginInterface, EventSubscriberInterface
 
     private function hasPackage($package)
     {
+        $lower = strtolower($package);
+
         $rootPackage = $this->composer->getPackage();
         $requires = $rootPackage->getRequires() + $rootPackage->getDevRequires();
         foreach ($requires as $name => $link) {
-            if (strtolower($name) === strtolower($package)) {
+            if (strtolower($name) === $lower) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private function isPackageReadyToInstall($package)
+    {
+        $lower = strtolower($package);
+
+        foreach ($this->packagesToInstall as $name => $version) {
+            if (strtolower($name) === $lower) {
                 return true;
             }
         }
@@ -282,7 +412,7 @@ class Plugin implements PluginInterface, EventSubscriberInterface
         $package = $versionSelector->findBestCandidate($name, null, null, 'stable');
 
         if (! $package) {
-            throw new \InvalidArgumentException(sprintf(
+            throw new InvalidArgumentException(sprintf(
                 'Could not find package %s at any version for your minimum-stability (%s).'
                     . ' Check the package spelling or your minimum-stability',
                 $name,

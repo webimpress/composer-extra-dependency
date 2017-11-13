@@ -29,11 +29,18 @@ you'd like to install with your library:
         "dependency": [
             "package/to-require",
             ...
-        ]
+        ],
+        "dependency-or": {
+            "Question": [
+                "package/to-choose",
+                "package/or-this",
+                ...
+            ]
+        }
     },
     "require": {
         "php": "^5.6 || ^7.0",
-        "webimpress/composer-extra-dependency": "^0.1 || ^1.0",
+        "webimpress/composer-extra-dependency": "^0.3 || ^1.0",
         ...
     }
     ...  
